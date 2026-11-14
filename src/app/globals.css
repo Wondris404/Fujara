@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --bg: #140e09;
+  --panel: #24180f;
+  --ink: #f4ead7;
+  --muted: #c8b59a;
+  --line: #4a3522;
+  --gold: #e4b15a;
+  --moss: #8eae86;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 500px at 10% -10%, rgba(228, 177, 90, 0.16), transparent 50%),
+    var(--bg);
+  color: var(--ink);
+  font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+}
