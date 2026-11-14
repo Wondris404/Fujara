@@ -9,6 +9,12 @@ test("imports a generated tone, plays it, and reopens it offline", async ({ page
   await expect(page.getByText("Available offline")).toBeVisible();
   await page.getByRole("listitem").getByRole("button", { name: "Play" }).click();
   await expect(page.getByRole("contentinfo").getByRole("button", { name: "Pause" })).toBeVisible();
+  const audio = page.locator("audio");
+  await expect.poll(async () => audio.evaluate((element: HTMLAudioElement) => element.currentTime)).toBeGreaterThan(0.05);
+  const beforeSeek = await audio.evaluate((element: HTMLAudioElement) => element.currentTime);
+  await page.getByLabel("Seek").fill("1");
+  await expect.poll(async () => audio.evaluate((element: HTMLAudioElement) => element.paused)).toBe(false);
+  await expect.poll(async () => audio.evaluate((element: HTMLAudioElement) => element.currentTime)).toBeGreaterThan(beforeSeek);
   await page.getByRole("link", { name: "Playlists" }).click();
   await expect(page.getByRole("heading", { name: "Playlists" })).toBeVisible();
   await expect(page.getByRole("contentinfo").getByRole("button", { name: "Pause" })).toBeVisible();
@@ -19,6 +25,12 @@ test("imports a generated tone, plays it, and reopens it offline", async ({ page
   await page.reload();
   await expect(page.getByRole("heading", { name: "Fujara" })).toBeVisible();
   await expect(page.getByText("Available offline")).toBeVisible();
-  await page.reload();
-  await expect(page.getByText("Available offline")).toBeVisible();
+  await page.getByRole("listitem").getByRole("button", { name: "Play" }).click();
+  await expect.poll(async () => page.locator("audio").evaluate((element: HTMLAudioElement) => element.paused)).toBe(false);
+  const offlineStart = await page.locator("audio").evaluate((element: HTMLAudioElement) => element.currentTime);
+  await expect.poll(async () => page.locator("audio").evaluate((element: HTMLAudioElement) => element.currentTime)).toBeGreaterThan(offlineStart);
+  await page.locator("audio").evaluate((element: HTMLAudioElement) => {
+    element.currentTime = Math.min(1, (element.duration || 2) / 2);
+  });
+  await expect.poll(async () => page.locator("audio").evaluate((element: HTMLAudioElement) => element.currentTime)).toBeGreaterThan(0.4);
 });

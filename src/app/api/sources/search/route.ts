@@ -17,7 +17,25 @@ export async function GET(request: Request) {
     const archive = await fetch(
       `https://archive.org/advancedsearch.php?q=${encodeURIComponent(query)}%20mediatype:audio&fl[]=identifier,title,creator,licenseurl&rows=5&output=json`,
     );
-    if (archive.ok) hits.push(...hitsFromArchive(await archive.json()));
+    if (archive.ok) {
+      const payload = (await archive.json()) as { response?: { docs?: { identifier?: string; title?: string; creator?: string }[] } };
+      for (const doc of payload.response?.docs ?? []) {
+        if (!doc.identifier) continue;
+        let licenseurl: string | undefined;
+        let files: { name?: string }[] | undefined;
+        try {
+          const meta = await fetch(`https://archive.org/metadata/${encodeURIComponent(doc.identifier)}`);
+          if (meta.ok) {
+            const body = (await meta.json()) as { metadata?: { licenseurl?: string }; files?: { name?: string }[] };
+            licenseurl = body.metadata?.licenseurl;
+            files = body.files;
+          }
+        } catch {
+          licenseurl = undefined;
+        }
+        hits.push(...hitsFromArchive({ response: { docs: [{ ...doc, licenseurl, files }] } }));
+      }
+    }
   } catch {
     // Same as above.
   }

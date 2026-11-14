@@ -1,4 +1,6 @@
 import { readGoogleOAuthConfig } from "@/domain/drive";
+import { saveDriveGrant } from "@/server/library-store";
+import { userIdFromRequest } from "@/server/request-user";
 import { NextResponse } from "next/server";
 
 function cookieValue(header: string | null, name: string): string | null {
@@ -71,14 +73,24 @@ export async function GET(request: Request) {
     return response;
   }
 
+  const userId = await userIdFromRequest(request);
+  if (!userId || !process.env.DATABASE_URL) {
+    const response = NextResponse.json(
+      { error: "not_connected", message: "A signed-in account and DATABASE_URL are required before a refresh token is stored. Nothing was uploaded." },
+      { status: 503 },
+    );
+    clearPkce(response, secure);
+    return response;
+  }
+  try {
+    await saveDriveGrant(userId, token.refresh_token);
+  } catch {
+    const response = NextResponse.json({ error: "grant_store_failed", message: "The refresh token was not stored. Nothing was uploaded." }, { status: 502 });
+    clearPkce(response, secure);
+    return response;
+  }
+
   const response = NextResponse.redirect(new URL("/settings?drive=authorized", request.url));
-  response.cookies.set("fujara_drive_refresh", token.refresh_token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure,
-    path: "/api/drive",
-    maxAge: 60 * 24 * 60 * 60,
-  });
   clearPkce(response, secure);
   return response;
 }

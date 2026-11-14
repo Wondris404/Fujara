@@ -28,11 +28,34 @@ export function hitsFromMusicBrainz(payload: unknown): DiscoveryHit[] {
     }));
 }
 
+const AUDIO_EXT = [".mp3", ".ogg", ".wav", ".flac", ".m4a", ".aac", ".opus"];
+
+export function usableOpenLicense(licenseurl: string | undefined): boolean {
+  if (!licenseurl) return false;
+  try {
+    const url = new URL(licenseurl);
+    return url.protocol === "https:" && (url.hostname === "creativecommons.org" || url.hostname.endsWith(".creativecommons.org"));
+  } catch {
+    return false;
+  }
+}
+
+export function pickArchiveAudioName(files: { name?: string }[] | undefined): string | null {
+  for (const file of files ?? []) {
+    const name = file.name ?? "";
+    if (!name || name.endsWith("/") || name.includes("..") || name.includes("/") || name.includes("\\")) continue;
+    const lower = name.toLowerCase();
+    if (AUDIO_EXT.some((ext) => lower.endsWith(ext))) return name;
+  }
+  return null;
+}
+
 type ArchiveDoc = {
   identifier?: string;
   title?: string;
   creator?: string;
   licenseurl?: string;
+  files?: { name?: string }[];
 };
 
 export function hitsFromArchive(payload: unknown): DiscoveryHit[] {
@@ -41,7 +64,8 @@ export function hitsFromArchive(payload: unknown): DiscoveryHit[] {
     .filter((doc) => doc.identifier && doc.title)
     .map((doc) => {
       const pageUrl = `https://archive.org/details/${doc.identifier}`;
-      const audioUrl = doc.licenseurl ? `https://archive.org/download/${doc.identifier}/${doc.identifier}.mp3` : undefined;
+      const fileName = usableOpenLicense(doc.licenseurl) ? pickArchiveAudioName(doc.files) : null;
+      const audioUrl = fileName ? `https://archive.org/download/${encodeURIComponent(doc.identifier as string)}/${encodeURIComponent(fileName)}` : undefined;
       return {
         provider: "internet-archive",
         title: doc.title ?? "Untitled",

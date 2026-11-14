@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const sampleRate = 22050;
-const seconds = 1;
+const seconds = 8;
 const samples = sampleRate * seconds;
 const data = Buffer.alloc(samples * 2);
 for (let i = 0; i < samples; i += 1) {

@@ -43,7 +43,7 @@ Unit tests exist (`npm test`). iPhone is **not verified**. Drive live upload is 
 
 ## Local-only mode
 
-If `.env.local` is missing, the app still imports and plays. Settings show Drive and the cloud library as **Not connected**. `/api/library` and `/api/backups` return 503 until `FUJARA_SESSION_SECRET` is set, and a wrong token returns 401. That local profile switch is not a production login.
+If `.env.local` is missing, the app still imports and plays. Account and Drive stay disconnected until Google OAuth values and `FUJARA_SESSION_SECRET` are set. `/api/library` also needs `DATABASE_URL` and then uses the `pg` driver with `set_config('fujara.user_id')` inside the same transaction. A local profile is not a cloud login. Drive connect is a second consent and stores the refresh token in `drive_grants`, not in page JavaScript. Setting env vars does not upload audio or create a database by itself. Apply `db/migrations/001_library.sql` and `db/migrations/002_grants_and_ops.sql`, then use Settings to sign in and, separately, connect Drive.
 
 ## Docs
 

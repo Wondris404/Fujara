@@ -1,4 +1,4 @@
-const CACHE = "fujara-shell-v1";
+const CACHE = "fujara-shell-v2";
 const SHELL = ["/", "/playlists", "/downloads", "/settings", "/manifest.webmanifest", "/offline.html", "/icons/icon.svg"];
 
 function sameOriginStatic(url) {
@@ -32,7 +32,8 @@ self.addEventListener("install", (event) => {
     (async () => {
       await putMany(SHELL);
       try {
-        const response = await fetch("/api/shell-assets", { cache: "no-store", credentials: "same-origin" });
+        let response = await fetch("/shell-assets.json", { cache: "no-store", credentials: "same-origin" });
+        if (!response.ok) response = await fetch("/api/shell-assets", { cache: "no-store", credentials: "same-origin" });
         if (response.ok) {
           const body = await response.json();
           const assets = Array.isArray(body.assets)

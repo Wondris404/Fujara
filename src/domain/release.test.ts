@@ -5,7 +5,7 @@ import { renameProfile, selectExistingProfile } from "./profiles";
 import { applySync, createMemoryCloud, linkTrackToPlaylist, readLibrary } from "@/server/cloud";
 import { issueSession, readSession } from "@/server/session";
 import { backupMarkFromUpload, deletionOutcome, googleAuthorizeUrl } from "./drive-flow";
-import { parseManifest, unavailableAfterManifestImport } from "./manifest";
+import { localLibraryManifest, parseManifest, unavailableAfterManifestImport } from "./manifest";
 import { hitsFromArchive, hitsFromMusicBrainz } from "./sources-parse";
 import type { CloudTrack } from "./sync-merge";
 import type { LibraryEntry } from "./types";
@@ -168,6 +168,35 @@ describe("accounts, sync, drive, discovery", () => {
     expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/drive.file");
   });
 
+  it("parses the shipped export and does not treat metadata as audio", () => {
+    const raw = localLibraryManifest({
+      profileId: "profile-1",
+      entries: [{
+        id: "t1",
+        profileId: "profile-1",
+        title: "Tone",
+        artist: "Fujara",
+        durationMs: 1000,
+        mime: "audio/wav",
+        contentHash: "abc",
+        source: null,
+        userEdited: false,
+        favorite: true,
+        deletedAt: null,
+        version: 1,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }],
+      playlists: [],
+      items: [],
+      backups: [],
+    });
+    const manifest = parseManifest(JSON.parse(JSON.stringify(raw)));
+    expect(manifest.tracks[0]?.title).toBe("Tone");
+    expect(manifest.tracks[0]?.ownerId).toBe("profile-1");
+    expect(unavailableAfterManifestImport(manifest, [])).toEqual(["t1"]);
+  });
+
   it("round-trips a manifest without pretending audio is present", () => {
     const manifest = parseManifest({
       version: 1,
@@ -185,9 +214,22 @@ describe("accounts, sync, drive, discovery", () => {
     expect(mb[0].audioUrl).toBeUndefined();
     const archive = hitsFromArchive({ response: { docs: [{ identifier: "gov-1922", title: "Speech", creator: "Archive" }] } });
     expect(archive[0].capabilities).toEqual(["metadata-search"]);
-    const licensed = hitsFromArchive({
+    const licensedWithoutFile = hitsFromArchive({
       response: { docs: [{ identifier: "pd-tone", title: "Tone", creator: "Public", licenseurl: "https://creativecommons.org/publicdomain/zero/1.0/" }] },
     });
+    expect(licensedWithoutFile[0].audioUrl).toBeUndefined();
+    const licensed = hitsFromArchive({
+      response: {
+        docs: [{
+          identifier: "pd-tone",
+          title: "Tone",
+          creator: "Public",
+          licenseurl: "https://creativecommons.org/publicdomain/zero/1.0/",
+          files: [{ name: "pd-tone_64kb.mp3" }],
+        }],
+      },
+    });
+    expect(licensed[0].audioUrl).toBe("https://archive.org/download/pd-tone/pd-tone_64kb.mp3");
     expect(licensed[0].capabilities).toContain("download");
   });
 });

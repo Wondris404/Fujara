@@ -6,5 +6,5 @@ export function missingLocalTracks(entries: LibraryEntry[], localTrackIds: Itera
 }
 
 export function shellUpdatePlan(): { nextCache: string; deletesLocalAudio: false } {
-  return { nextCache: "fujara-shell-v1", deletesLocalAudio: false };
+  return { nextCache: "fujara-shell-v2", deletesLocalAudio: false };
 }

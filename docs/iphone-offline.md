@@ -20,7 +20,7 @@ iPhone is **not verified**. These steps were **not run on a real iPhone**. Deskt
 
 ## Updates and storage
 
-- The shell cache name is `fujara-shell-v1`. Activating a new cache deletes older shell caches only. It does not delete IndexedDB.
+- The shell cache name is `fujara-shell-v2`. Activating a new cache deletes older shell caches only. It does not delete IndexedDB.
 - Ask for persistent storage from Downloads. Record whether iOS granted it. WebKit has historically applied a seven-day cap to script-writable storage for sites that are not used, with different treatment for Home Screen web apps. Re-read https://webkit.org/tracking-prevention/ before relying on it.
 - Safari in a tab and the Home Screen app do not share storage. Import inside the icon you will use offline.
 - If the browser clears storage, library rows that lose their blobs reconcile as not offline. Metadata without bytes shows **Needs download**.

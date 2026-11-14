@@ -10,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { adoptManifest, localLibraryManifest, parseManifest } from "@/domain/manifest";
 import { availabilityFor, availabilityLabels } from "@/domain/labels";
 import { classifyAudioFile, isQuotaError, metadataFromFilename } from "@/domain/import-policy";
 import { planImport } from "@/domain/import-flow";
@@ -69,6 +70,7 @@ type FujaraContextValue = {
   requestPersistent: () => Promise<void>;
   reconcile: () => string[];
   exportManifest: () => string;
+  importManifest: (raw: string) => Promise<string>;
   labelsFor: (entry: LibraryEntry) => string[];
   queue: string[];
   queueIndex: number;
@@ -658,17 +660,62 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
     reconcile: () => missingLocalTracks(snap.entries, localIds),
     exportManifest: () =>
       JSON.stringify(
-        {
-          version: 1,
-          profileId: profile?.id ?? null,
-          entries: snap.entries.map(({ ...entry }) => entry),
+        localLibraryManifest({
+          profileId: profile?.id ?? "local",
+          entries: snap.entries,
           playlists: snap.playlists,
-          items: snap.items.filter((item) => snap.playlists.some((playlist) => playlist.id === item.playlistId)),
+          items: snap.items,
           backups: snap.backups,
-        },
+        }),
         null,
         2,
       ),
+    importManifest: async (raw: string) => {
+      const active = profile;
+      const db = dbRef.current;
+      if (!active || !db) return "Choose a local profile before importing a manifest.";
+      let adopted;
+      try {
+        adopted = adoptManifest(parseManifest(JSON.parse(raw) as unknown), active.id);
+      } catch (error) {
+        return error instanceof Error ? error.message : "Unsupported manifest.";
+      }
+      for (const track of adopted.tracks) {
+        const existing = snap.entries.find((entry) => entry.id === track.id);
+        await browserDb.putEntry(db, {
+          id: track.id,
+          profileId: active.id,
+          title: track.title,
+          artist: track.artist,
+          durationMs: existing?.durationMs ?? null,
+          mime: existing?.mime ?? "audio/mpeg",
+          contentHash: track.contentHash,
+          source: track.sourceProvider ? { provider: track.sourceProvider } : existing?.source ?? null,
+          userEdited: existing?.userEdited ?? false,
+          favorite: track.favorite,
+          deletedAt: track.deletedAt,
+          version: track.version,
+          createdAt: existing?.createdAt ?? track.updatedAt,
+          updatedAt: track.updatedAt,
+        });
+      }
+      for (const playlist of adopted.playlists) {
+        await browserDb.putPlaylist(db, {
+          id: playlist.id,
+          profileId: active.id,
+          name: playlist.name,
+          version: playlist.version,
+          updatedAt: playlist.updatedAt,
+        });
+        for (let position = 0; position < playlist.trackIds.length; position += 1) {
+          const trackId = playlist.trackIds[position];
+          await browserDb.putItem(db, { id: `${playlist.id}:${trackId}`, playlistId: playlist.id, trackId, position });
+        }
+      }
+      await reload(db, active.id);
+      const missing = adopted.tracks.filter((track) => track.deletedAt === null).length;
+      return `Imported metadata for ${missing} tracks. Audio is not in the file. Restore bytes from this device or from Drive.`;
+    },
     labelsFor: (entry) =>
       availabilityLabels(
         availabilityFor({

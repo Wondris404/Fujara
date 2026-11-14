@@ -12,7 +12,7 @@ Fujara is one Next.js app. Audio bytes stay on the device in IndexedDB. Postgres
 | `src/domain/player-machine.ts` | `createLoadGate` drops a stale load when a newer track starts. `shouldReloadAudio` replaces `src` only for a track change |
 | `src/server/session.ts` | HMAC-SHA-256 session tokens. A token equal to `FUJARA_SESSION_SECRET` is rejected |
 | `src/app` | Library, playlists, downloads, settings |
-| `public/sw.js` | Shell cache `fujara-shell-v1`. Skips non-GET, `/api/`, and paths that contain `callback`. Does not delete IndexedDB |
+| `public/sw.js` | Shell cache `fujara-shell-v2`. Skips non-GET, `/api/`, and paths that contain `callback`. Does not delete IndexedDB. Precache list is `public/shell-assets.json`, written after `next build`. |
 | `src/app/api` | Cloud, catalogue search, and Drive OAuth. These routes do not stream the user's library |
 
 ## Flows

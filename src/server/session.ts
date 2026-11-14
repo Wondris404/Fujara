@@ -16,9 +16,11 @@ async function sign(secret: string, payload: string): Promise<string> {
   return bytesToB64Url(new Uint8Array(mac));
 }
 
-export async function issueSession(userId: string, secret: string): Promise<string> {
+const SESSION_MS = 7 * 24 * 60 * 60 * 1000;
+
+export async function issueSession(userId: string, secret: string, now = Date.now()): Promise<string> {
   if (!secret || !userId) throw new Error("Session secret and user id are required.");
-  const payload = bytesToB64Url(new TextEncoder().encode(JSON.stringify({ uid: userId, v: 1 })));
+  const payload = bytesToB64Url(new TextEncoder().encode(JSON.stringify({ uid: userId, v: 1, exp: now + SESSION_MS })));
   return `${payload}.${await sign(secret, payload)}`;
 }
 
@@ -29,7 +31,8 @@ export async function readSession(token: string | null | undefined, secret: stri
   const expected = await sign(secret, payload);
   if (expected !== mac) return null;
   try {
-    const body = JSON.parse(new TextDecoder().decode(b64UrlToBytes(payload))) as { uid?: string };
+    const body = JSON.parse(new TextDecoder().decode(b64UrlToBytes(payload))) as { uid?: string; exp?: number };
+    if (typeof body.exp === "number" && body.exp < Date.now()) return null;
     return body.uid || null;
   } catch {
     return null;

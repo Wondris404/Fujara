@@ -1,8 +1,13 @@
 import { googleAuthorizeUrl, newPkceVerifier, pkceS256 } from "@/domain/drive-flow";
 import { readGoogleOAuthConfig } from "@/domain/drive";
+import { userIdFromRequest } from "@/server/request-user";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
+  const userId = await userIdFromRequest(request);
+  if (!userId) {
+    return NextResponse.json({ error: "unauthorized", message: "Sign in before connecting Drive. Drive is optional and is not part of sign-in." }, { status: 401 });
+  }
   const config = readGoogleOAuthConfig({
     GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,

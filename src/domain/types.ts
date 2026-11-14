@@ -85,4 +85,4 @@ export const ACCEPTED_EXTENSIONS = ["mp3", "wav", "m4a", "mp4", "ogg", "webm", "
 
 export const MAX_IMPORT_BYTES = 80_000_000;
 
-export const SHELL_CACHE = "fujara-shell-v1";
+export const SHELL_CACHE = "fujara-shell-v2";
