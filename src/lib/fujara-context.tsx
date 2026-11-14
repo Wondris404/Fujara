@@ -10,11 +10,15 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { fetchArchiveAudio } from "@/domain/archive-fetch";
+import { deleteDriveFile, downloadDriveBytes, ensureFujaraFolder, uploadResumable } from "@/domain/drive-transfer";
+import { enqueueOp, settleOps, type SyncOp } from "@/domain/op-queue";
 import { adoptManifest, localLibraryManifest, parseManifest } from "@/domain/manifest";
+
 import { availabilityFor, availabilityLabels } from "@/domain/labels";
 import { classifyAudioFile, isQuotaError, metadataFromFilename } from "@/domain/import-policy";
 import { planImport } from "@/domain/import-flow";
-import { createLoadGate, shouldReloadAudio } from "@/domain/player-machine";
+import { createLoadGate, queueIndexAfterEnd, shouldReloadAudio } from "@/domain/player-machine";
 import { moveItem, orderedItems } from "@/domain/playlist";
 import { missingLocalTracks } from "@/domain/reconcile";
 import { sha256Hex } from "@/domain/hash";
@@ -71,6 +75,20 @@ type FujaraContextValue = {
   reconcile: () => string[];
   exportManifest: () => string;
   importManifest: (raw: string) => Promise<string>;
+  importRemoteAudio: (input: { title: string; artist: string; audioUrl: string; pageUrl?: string; providerTrackId: string }) => Promise<string>;
+  backupTrack: (trackId: string) => Promise<string>;
+  restoreTrack: (trackId: string) => Promise<string>;
+  deleteDriveBackup: (trackId: string) => Promise<string>;
+  pushSync: () => Promise<string>;
+  pullSync: () => Promise<string>;
+  renamePlaylist: (playlistId: string, name: string) => Promise<void>;
+  deletePlaylist: (playlistId: string) => Promise<void>;
+  removeFromQueue: (index: number) => void;
+  toggleShuffle: () => void;
+  cycleRepeat: () => void;
+  repeatMode: "off" | "all" | "one";
+  shuffleOn: boolean;
+  pendingOps: number;
   labelsFor: (entry: LibraryEntry) => string[];
   queue: string[];
   queueIndex: number;
@@ -134,6 +152,13 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
   const [duration, setDuration] = useState(0);
   const [volume, setVolumeState] = useState(1);
   const [playerError, setPlayerError] = useState("");
+  const [repeatMode, setRepeatMode] = useState<"off" | "all" | "one">("off");
+  const [shuffleOn, setShuffleOn] = useState(false);
+  const [pendingOps, setPendingOps] = useState(0);
+  const repeatRef = useRef(repeatMode);
+  const queueLenRef = useRef(0);
+  repeatRef.current = repeatMode;
+  queueLenRef.current = queue.length;
   const [storageNote, setStorageNote] = useState("");
 
   const reload = useCallback(async (db: IDBDatabase, profileId: string) => {
@@ -164,7 +189,10 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
     const onEnded = () => {
-      setQueueIndex((index) => index + 1);
+      setQueueIndex((index) => {
+        const next = queueIndexAfterEnd(index, queueLenRef.current, repeatRef.current);
+        return next === null ? index : next;
+      });
     };
     element.addEventListener("timeupdate", onTime);
     element.addEventListener("durationchange", onMeta);
@@ -516,23 +544,36 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
     setProfile(updated);
   }, [profile]);
 
+  const rememberOp = useCallback((kind: SyncOp["kind"], body: Record<string, unknown>) => {
+    if (!profile) return;
+    const id = crypto.randomUUID();
+    const op: SyncOp = { id, kind, body: { ...body, opId: id }, attempts: 0 };
+    const raw = localStorage.getItem(`fujara.ops.${profile.id}`);
+    const existing = raw ? (JSON.parse(raw) as SyncOp[]) : [];
+    const next = enqueueOp(existing, op);
+    localStorage.setItem(`fujara.ops.${profile.id}`, JSON.stringify(next));
+    setPendingOps(next.length);
+  }, [profile]);
+
   const editEntry = useCallback(
     async (trackId: string, title: string, artist: string) => {
       const db = dbRef.current;
       if (!db || !profile) return;
       const current = (await browserDb.entries(db)).find((row) => row.id === trackId && row.profileId === profile.id);
       if (!current) return;
-      await browserDb.putEntry(db, {
+      const updated = {
         ...current,
         title: title.trim() || current.title,
         artist: artist.trim() || current.artist,
         userEdited: true,
         version: (current.version ?? 1) + 1,
         updatedAt: new Date().toISOString(),
-      });
+      };
+      await browserDb.putEntry(db, updated);
+      rememberOp("track", { opId: crypto.randomUUID(), id: updated.id, title: updated.title, artist: updated.artist, favorite: updated.favorite, version: updated.version, contentHash: updated.contentHash, sourceProvider: updated.source?.provider ?? null, deletedAt: updated.deletedAt });
       await reload(db, profile.id);
     },
-    [profile, reload],
+    [profile, reload, rememberOp],
   );
 
   const toggleFavorite = useCallback(
@@ -658,6 +699,231 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
     toggleFavorite,
     requestPersistent,
     reconcile: () => missingLocalTracks(snap.entries, localIds),
+    importRemoteAudio: async (input) => {
+      const db = dbRef.current;
+      if (!db) return "Storage is not open yet.";
+      const active = await ensureProfile();
+      try {
+        const saved = await fetchArchiveAudio(input.audioUrl);
+        const copy = new Uint8Array(saved.bytes);
+        const hash = await sha256Hex(copy.buffer);
+        const id = uid();
+        const now = new Date().toISOString();
+        await commitStores(db, (stores) => {
+          stores.audio.put({
+            id,
+            profileId: active.id,
+            trackId: id,
+            size: copy.byteLength,
+            sha256: hash,
+            mime: saved.mime,
+            blob: new Blob([copy], { type: saved.mime }),
+          });
+          stores.entries.put({
+            id,
+            profileId: active.id,
+            title: input.title,
+            artist: input.artist,
+            durationMs: null,
+            mime: saved.mime,
+            contentHash: hash,
+            source: { provider: "internet-archive", pageUrl: input.pageUrl, providerTrackId: input.providerTrackId },
+            userEdited: false,
+            favorite: false,
+            deletedAt: null,
+            version: 1,
+            createdAt: now,
+            updatedAt: now,
+          });
+        });
+        await reload(db, active.id);
+        return `Saved offline: ${input.title}`;
+      } catch (error) {
+        return error instanceof Error ? error.message : "Download failed. Nothing was marked offline.";
+      }
+    },
+    backupTrack: async (trackId) => {
+      const db = dbRef.current;
+      if (!db || !profile) return "Choose a local profile first.";
+      const accessResponse = await fetch("/api/drive/access", { method: "POST" });
+      const access = (await accessResponse.json()) as { accessToken?: string };
+      if (!accessResponse.ok || !access.accessToken) return "Drive is not connected for this account. Nothing was uploaded.";
+      const row = await browserDb.getAudio(db, trackId);
+      const entry = snap.entries.find((item) => item.id === trackId);
+      if (!row?.blob || !entry) return "Local audio is missing, so there is nothing to back up.";
+      const bytes = new Uint8Array(await row.blob.arrayBuffer());
+      if (snap.backups.some((backup) => backup.trackId === trackId && backup.status === "verified")) {
+        return "This track already has a Drive backup. Reconnect does not upload a second copy.";
+      }
+      try {
+        const folderId = await ensureFujaraFolder(access.accessToken);
+        const uploaded = await uploadResumable({
+          accessToken: access.accessToken,
+          filename: `${entry.title}.audio`,
+          mime: row.mime,
+          bytes,
+          parentId: folderId,
+        });
+        await browserDb.putBackup(db, {
+          id: uid(),
+          profileId: profile.id,
+          trackId,
+          provider: "google-drive",
+          fileId: uploaded.fileId,
+          status: "verified",
+          checksum: await sha256Hex(new Uint8Array(bytes).buffer),
+          filename: uploaded.name,
+          mime: row.mime,
+          updatedAt: new Date().toISOString(),
+        });
+        await reload(db, profile.id);
+        return `Backed up ${entry.title}.`;
+      } catch (error) {
+        return error instanceof Error ? error.message : "Backup failed. No Drive file id was stored.";
+      }
+    },
+    restoreTrack: async (trackId) => {
+      const db = dbRef.current;
+      if (!db || !profile) return "Choose a local profile first.";
+      const backup = snap.backups.find((item) => item.trackId === trackId && item.fileId);
+      if (!backup) return "No Drive backup reference for this track.";
+      const accessResponse = await fetch("/api/drive/access", { method: "POST" });
+      const access = (await accessResponse.json()) as { accessToken?: string };
+      if (!accessResponse.ok || !access.accessToken) return "Drive is not connected. Local files were not changed.";
+      try {
+        const bytes = await downloadDriveBytes(access.accessToken, backup.fileId);
+        const copy = new Uint8Array(bytes);
+        const hash = await sha256Hex(copy.buffer);
+        if (backup.checksum && hash !== backup.checksum) return "Checksum did not match. The file was not saved.";
+        await browserDb.putAudio(db, {
+          id: trackId,
+          profileId: profile.id,
+          trackId,
+          size: copy.byteLength,
+          sha256: hash,
+          mime: backup.mime,
+          blob: new Blob([copy], { type: backup.mime }),
+        });
+        await reload(db, profile.id);
+        return "Restored audio onto this device.";
+      } catch (error) {
+        return error instanceof Error ? error.message : "Restore failed.";
+      }
+    },
+    deleteDriveBackup: async (trackId) => {
+      const db = dbRef.current;
+      if (!db || !profile) return "Choose a local profile first.";
+      const backup = snap.backups.find((item) => item.trackId === trackId);
+      if (!backup) return "No backup reference.";
+      const accessResponse = await fetch("/api/drive/access", { method: "POST" });
+      const access = (await accessResponse.json()) as { accessToken?: string };
+      if (!accessResponse.ok || !access.accessToken) return "Drive is not connected. The reference was kept.";
+      try {
+        await deleteDriveFile(access.accessToken, backup.fileId);
+        await browserDb.deleteBackup(db, backup.id);
+        await reload(db, profile.id);
+        return "Deleted the Drive file and the backup reference. Local audio was kept.";
+      } catch (error) {
+        return error instanceof Error ? error.message : "Drive delete failed. The reference was kept.";
+      }
+    },
+    pushSync: async () => {
+      if (!profile) return "Choose a local profile first.";
+      const raw = localStorage.getItem(`fujara.ops.${profile.id}`);
+      const ops = raw ? (JSON.parse(raw) as SyncOp[]) : [];
+      if (ops.length === 0) return "No pending metadata changes.";
+      try {
+        const response = await fetch("/api/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tracks: ops.filter((op) => op.kind === "track").map((op) => op.body),
+            playlists: ops.filter((op) => op.kind === "playlist").map((op) => op.body),
+          }),
+        });
+        const body = (await response.json()) as { applied?: string[]; failed?: { id: string; error: string }[]; error?: string };
+        if (!response.ok) return body.error ?? "Sync failed. Pending changes stayed on this device.";
+        const next = settleOps(ops, body.applied ?? [], body.failed ?? []);
+        localStorage.setItem(`fujara.ops.${profile.id}`, JSON.stringify(next));
+        setPendingOps(next.length);
+        return next.length === 0 ? "Metadata sync finished." : "Some metadata changes still need a retry.";
+      } catch {
+        return "Offline. Metadata changes stayed in the local queue.";
+      }
+    },
+    pullSync: async () => {
+      const db = dbRef.current;
+      if (!db || !profile) return "Choose a local profile first.";
+      const response = await fetch("/api/sync");
+      if (!response.ok) return "Cloud library is not available. Local audio was not changed.";
+      const body = (await response.json()) as {
+        tracks?: { id: string; title: string; artist: string; favorite: boolean; version: number; updatedAt: string; deletedAt: string | null; contentHash: string | null; sourceProvider: string | null }[];
+        playlists?: { id: string; name: string; version: number; updatedAt: string; deletedAt: string | null; trackIds: string[] }[];
+      };
+      const manifest = adoptManifest(parseManifest({ version: 1, tracks: body.tracks ?? [], playlists: body.playlists ?? [], backups: [] }), profile.id);
+      for (const track of manifest.tracks) {
+        const existing = snap.entries.find((entry) => entry.id === track.id);
+        if (existing && existing.version > track.version) continue;
+        await browserDb.putEntry(db, {
+          id: track.id,
+          profileId: profile.id,
+          title: track.title,
+          artist: track.artist,
+          durationMs: existing?.durationMs ?? null,
+          mime: existing?.mime ?? "audio/mpeg",
+          contentHash: track.contentHash,
+          source: track.sourceProvider ? { provider: track.sourceProvider } : null,
+          userEdited: existing?.userEdited ?? false,
+          favorite: track.favorite,
+          deletedAt: track.deletedAt,
+          version: track.version,
+          createdAt: existing?.createdAt ?? track.updatedAt,
+          updatedAt: track.updatedAt,
+        });
+      }
+      await reload(db, profile.id);
+      return "Metadata pulled. Tracks are not marked downloaded until audio exists on this device.";
+    },
+    renamePlaylist: async (playlistId, name) => {
+      const db = dbRef.current;
+      if (!db || !profile || !name.trim()) return;
+      const current = (await browserDb.playlists(db)).find((row) => row.id === playlistId && row.profileId === profile.id);
+      if (!current) return;
+      await browserDb.putPlaylist(db, { ...current, name: name.trim(), version: current.version + 1, updatedAt: new Date().toISOString() });
+      await reload(db, profile.id);
+    },
+    deletePlaylist: async (playlistId) => {
+      const db = dbRef.current;
+      if (!db || !profile) return;
+      const items = await browserDb.items(db);
+      for (const item of items.filter((row) => row.playlistId === playlistId)) await browserDb.deleteItem(db, item.id);
+      await browserDb.deletePlaylist(db, playlistId);
+      await reload(db, profile.id);
+    },
+    removeFromQueue: (index) => {
+      setQueue((ids) => ids.filter((_, itemIndex) => itemIndex !== index));
+      setQueueIndex((current) => (index < current ? current - 1 : current));
+    },
+    toggleShuffle: () => {
+      setShuffleOn((on) => !on);
+      setQueue((ids) => {
+        if (ids.length < 2) return ids;
+        const current = ids[queueIndex] ?? ids[0];
+        const rest = ids.filter((id) => id !== current);
+        for (let index = rest.length - 1; index > 0; index -= 1) {
+          const swap = Math.floor(Math.random() * (index + 1));
+          const hold = rest[index];
+          rest[index] = rest[swap];
+          rest[swap] = hold;
+        }
+        return [current, ...rest];
+      });
+      setQueueIndex(0);
+    },
+    cycleRepeat: () => setRepeatMode((mode) => (mode === "off" ? "all" : mode === "all" ? "one" : "off")),
+    repeatMode,
+    shuffleOn,
+    pendingOps,
     exportManifest: () =>
       JSON.stringify(
         localLibraryManifest({

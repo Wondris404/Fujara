@@ -139,6 +139,7 @@ export const browserDb = {
   deleteEntry: (db: IDBDatabase, id: string) => remove(db, "entries", id),
   deleteAudio: (db: IDBDatabase, id: string) => remove(db, "audio", id),
   deleteItem: (db: IDBDatabase, id: string) => remove(db, "items", id),
+  deletePlaylist: (db: IDBDatabase, id: string) => remove(db, "playlists", id),
   deleteBackup: (db: IDBDatabase, id: string) => remove(db, "backups", id),
   entries: (db: IDBDatabase) => all<LibraryEntry>(db, "entries"),
   audio: (db: IDBDatabase) => all<AudioRow>(db, "audio"),

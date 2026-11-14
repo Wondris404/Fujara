@@ -33,4 +33,22 @@ test("imports a generated tone, plays it, and reopens it offline", async ({ page
     element.currentTime = Math.min(1, (element.duration || 2) / 2);
   });
   await expect.poll(async () => page.locator("audio").evaluate((element: HTMLAudioElement) => element.currentTime)).toBeGreaterThan(0.4);
+  await page.goto("/playlists");
+  await expect(page.getByRole("heading", { name: "Playlists" })).toBeVisible();
+});
+
+test("volume does not restart playback and a second profile has an empty library", async ({ page }) => {
+  await page.goto("/");
+  await page.getByText("Nothing in the library yet").waitFor();
+  await page.getByLabel("Import audio").setInputFiles(path.join(process.cwd(), "public", "fixtures", "tone.wav"));
+  await page.getByRole("listitem").getByRole("button", { name: "Play" }).click();
+  await expect.poll(async () => page.locator("audio").evaluate((element: HTMLAudioElement) => element.currentTime)).toBeGreaterThan(0.05);
+  const mark = await page.locator("audio").evaluate((element: HTMLAudioElement) => element.currentTime);
+  await page.getByLabel("Volume").fill("0.4");
+  await expect.poll(async () => page.locator("audio").evaluate((element: HTMLAudioElement) => element.currentTime)).toBeGreaterThanOrEqual(mark);
+  await page.goto("/settings");
+  await page.getByLabel("New local profile name").fill("Other shelf");
+  await page.getByLabel("Create and switch to a new local profile").click();
+  await page.goto("/");
+  await expect(page.getByText("Nothing in the library yet")).toBeVisible();
 });

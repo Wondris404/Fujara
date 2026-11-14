@@ -81,6 +81,12 @@ export function Shell({ children }: { children: ReactNode }) {
               <button type="button" className="rounded border px-3 py-1" style={{ borderColor: "var(--line)" }} onClick={player.next}>
                 Next
               </button>
+              <button type="button" className="rounded border px-3 py-1" style={{ borderColor: "var(--line)" }} onClick={player.toggleShuffle}>
+                {player.shuffleOn ? "Shuffle on" : "Shuffle"}
+              </button>
+              <button type="button" className="rounded border px-3 py-1" style={{ borderColor: "var(--line)" }} onClick={player.cycleRepeat}>
+                Repeat {player.repeatMode}
+              </button>
             </div>
           </div>
           <label className="flex items-center gap-3 text-xs text-[var(--muted)]">
@@ -118,6 +124,9 @@ export function Shell({ children }: { children: ReactNode }) {
                     className={current ? "text-[var(--gold)]" : "text-[var(--muted)]"}
                   >
                     {title}
+                    <button type="button" className="ml-2" aria-label={`Remove ${title} from queue`} onClick={() => player.removeFromQueue(index)}>
+                      Remove
+                    </button>
                   </li>
                 );
               })}

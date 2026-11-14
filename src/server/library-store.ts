@@ -96,6 +96,49 @@ export async function readDriveGrant(userId: string): Promise<string | null> {
   });
 }
 
+export type PlaylistWrite = {
+  id?: string;
+  name?: string;
+  version?: number;
+  deletedAt?: string | null;
+  trackIds?: string[];
+  opId?: string;
+};
+
+export async function upsertPlaylist(query: SqlQuery, ownerId: string, body: PlaylistWrite): Promise<{ status: "saved" | "stale" | "invalid"; attached: string[] }> {
+  if (!body.id || !body.name) return { status: "invalid", attached: [] };
+  if (body.opId) {
+    const seen = await query(
+      `insert into sync_ops (id, owner_id, kind) values ($1, $2, 'playlist') on conflict (id) do nothing returning id`,
+      [body.opId, ownerId],
+    );
+    if (seen.rows.length === 0) return { status: "saved", attached: body.trackIds ?? [] };
+  }
+  await query(`insert into profiles (id, display_name) values ($1, 'Fujara') on conflict (id) do nothing`, [ownerId]);
+  const saved = await query(
+    `insert into playlists (id, owner_id, name, version, deleted_at, updated_at)
+     values ($1, $2, $3, $4, $5, now())
+     on conflict (id) do update set name = excluded.name, version = excluded.version, deleted_at = excluded.deleted_at, updated_at = now()
+     where playlists.owner_id = $2 and playlists.version <= excluded.version
+     returning id`,
+    [body.id, ownerId, body.name, body.version ?? 1, body.deletedAt ?? null],
+  );
+  if (!saved.rows[0]) return { status: "stale", attached: [] };
+  await query(`delete from playlist_items where playlist_id = $1`, [body.id]);
+  const attached: string[] = [];
+  for (let index = 0; index < (body.trackIds ?? []).length; index += 1) {
+    const trackId = body.trackIds?.[index];
+    const link = await query(
+      `insert into playlist_items (id, playlist_id, track_id, position)
+       select $1, $2, tracks.id, $3 from tracks where tracks.id = $4 and tracks.owner_id = $5 and tracks.deleted_at is null
+       returning track_id`,
+      [`${body.id}:${trackId}`, body.id, index, trackId, ownerId],
+    );
+    if (link.rows[0]) attached.push(String(link.rows[0].track_id));
+  }
+  return { status: "saved", attached };
+}
+
 export async function clearDriveGrant(userId: string): Promise<void> {
   await withUser(userId, async (query) => {
     await query(`delete from drive_grants where owner_id = $1`, [userId]);

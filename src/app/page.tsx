@@ -7,14 +7,15 @@ export default function LibraryPage() {
   const app = useFujara();
   const [message, setMessage] = useState("");
   const [catalogueQuery, setCatalogueQuery] = useState("");
-  const [hits, setHits] = useState<{ title: string; artist: string; capabilities: string[]; pageUrl?: string }[]>([]);
+  const [hits, setHits] = useState<{ title: string; artist: string; capabilities: string[]; pageUrl?: string; audioUrl?: string; providerTrackId?: string }[]>([]);
   const [searchNote, setSearchNote] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const [sort, setSort] = useState<"title" | "artist">("title");
   const filtered = app.entries.filter((entry) => {
     const q = app.query.trim().toLowerCase();
     if (!q) return true;
     return `${entry.title} ${entry.artist}`.toLowerCase().includes(q);
-  });
+  }).sort((a, b) => (sort === "title" ? a.title : a.artist).localeCompare(sort === "title" ? b.title : b.artist));
 
   async function take(files: FileList | File[] | null) {
     if (!files || files.length === 0) return;
@@ -66,6 +67,13 @@ export default function LibraryPage() {
             value={app.query}
             onChange={(event) => app.setQuery(event.target.value)}
           />
+          <label className="text-sm">
+            Sort
+            <select aria-label="Sort library" className="ml-2 rounded border bg-transparent px-2 py-1" value={sort} onChange={(event) => setSort(event.target.value as "title" | "artist")}>
+              <option value="title">Title</option>
+              <option value="artist">Artist</option>
+            </select>
+          </label>
         </div>
         <p className="mt-3 text-sm text-[var(--muted)]">On desktop you can also drop audio files here.</p>
         {message ? <p className="mt-2 text-sm">{message}</p> : null}
@@ -99,7 +107,7 @@ export default function LibraryPage() {
             setSearchNote("Searching…");
             void fetch(`/api/sources/search?q=${encodeURIComponent(q)}`)
               .then((response) => response.json())
-              .then((body: { hits?: { title: string; artist: string; capabilities: string[]; pageUrl?: string }[] }) => {
+              .then((body: { hits?: { title: string; artist: string; capabilities: string[]; pageUrl?: string; audioUrl?: string; providerTrackId?: string }[] }) => {
                 setHits(body.hits ?? []);
                 setSearchNote(body.hits?.length ? "" : "No results from the connected sources.");
               })
@@ -120,7 +128,26 @@ export default function LibraryPage() {
                   <a href={hit.pageUrl} target="_blank" rel="noreferrer">Open source</a>
                 </>
               ) : null}
-              {hit.capabilities.includes("download") ? " · Download is offered by the source page" : " · Audio unavailable here"}
+              {hit.audioUrl ? (
+                <button
+                  type="button"
+                  className="ml-2 underline"
+                  onClick={() => {
+                    setSearchNote(`Saving ${hit.title}…`);
+                    void app.importRemoteAudio({
+                      title: hit.title,
+                      artist: hit.artist,
+                      audioUrl: hit.audioUrl as string,
+                      pageUrl: hit.pageUrl,
+                      providerTrackId: hit.providerTrackId ?? hit.title,
+                    }).then(setSearchNote);
+                  }}
+                >
+                  Save audio in Fujara
+                </button>
+              ) : (
+                " · Audio unavailable here"
+              )}
             </li>
           ))}
         </ul>

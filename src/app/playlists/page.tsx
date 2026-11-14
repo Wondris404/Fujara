@@ -35,6 +35,13 @@ export default function PlaylistsPage() {
         return (
           <article key={playlist.id} className="rounded-2xl border p-4" style={{ borderColor: "var(--line)" }}>
             <h3 className="text-xl">{playlist.name}</h3>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" aria-label={`Rename ${playlist.name}`} onClick={() => {
+                const next = window.prompt("Playlist name", playlist.name);
+                if (next) void app.renamePlaylist(playlist.id, next);
+              }}>Rename</button>
+              <button type="button" aria-label={`Delete playlist ${playlist.name}`} onClick={() => void app.deletePlaylist(playlist.id)}>Delete playlist</button>
+            </div>
             <p className="text-xs text-[var(--muted)]">Version {playlist.version}. Order is stored on this device.</p>
             {rows.length === 0 ? <p className="mt-2 text-sm">This playlist is empty. Add tracks from the library.</p> : null}
             <ol className="mt-3 space-y-2">

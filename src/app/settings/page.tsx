@@ -123,6 +123,12 @@ export default function SettingsPage() {
           >
             Add local library to signed-in account
           </button>
+          <button type="button" className="rounded-full border px-4 py-2 text-sm" style={{ borderColor: "var(--line)" }} onClick={() => void app.pushSync().then(setNote)}>
+            Sync pending changes
+          </button>
+          <button type="button" className="rounded-full border px-4 py-2 text-sm" style={{ borderColor: "var(--line)" }} onClick={() => void app.pullSync().then(setNote)}>
+            Pull metadata
+          </button>
         </div>
       </article>
       <article className="rounded-2xl border p-4" style={{ borderColor: "var(--line)" }}>

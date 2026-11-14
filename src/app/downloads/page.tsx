@@ -1,10 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import { formatBytes, useFujara } from "@/lib/fujara-context";
 
 export default function DownloadsPage() {
   const app = useFujara();
   const missing = app.reconcile();
+  const [note, setNote] = useState("");
   return (
     <section className="space-y-4">
       <h2 className="text-2xl">Downloads</h2>
@@ -17,6 +19,8 @@ export default function DownloadsPage() {
         Request persistent storage
       </button>
       {app.storageNote ? <p className="text-sm">{app.storageNote}</p> : null}
+      {note ? <p className="text-sm">{note}</p> : null}
+      <p className="text-sm">Pending metadata changes: {app.pendingOps}</p>
       {app.entries.length === 0 ? <p className="text-sm text-[var(--muted)]">No local audio yet.</p> : null}
       <ul className="space-y-2">
         {app.entries.map((entry) => {
@@ -26,6 +30,15 @@ export default function DownloadsPage() {
               <p>{entry.title}</p>
               <p className="text-xs text-[var(--moss)]">{app.labelsFor(entry).join(" · ")}</p>
               <div className="mt-2 flex flex-wrap gap-2 text-sm">
+                <button type="button" aria-label={`Back up ${entry.title} to Drive`} disabled={!offline} onClick={() => void app.backupTrack(entry.id).then(setNote)}>
+                  Back up to Drive
+                </button>
+                <button type="button" aria-label={`Restore ${entry.title} from Drive`} onClick={() => void app.restoreTrack(entry.id).then(setNote)}>
+                  Restore from Drive
+                </button>
+                <button type="button" aria-label={`Delete Drive file for ${entry.title}`} onClick={() => void app.deleteDriveBackup(entry.id).then(setNote)}>
+                  Delete Drive backup
+                </button>
                 <button type="button" aria-label={`Remove local download of ${entry.title}`} disabled={!offline} onClick={() => void app.removeLocal(entry.id)}>
                   Remove local download
                 </button>
