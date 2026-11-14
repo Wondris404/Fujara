@@ -25,7 +25,7 @@ export default function PlaylistsPage() {
           onChange={(event) => setName(event.target.value)}
           placeholder="New playlist"
         />
-        <button className="rounded-full bg-[var(--gold)] px-4 py-2 text-[#1b120c]" type="submit">
+        <button className="rounded-full bg-[var(--gold)] px-4 py-2 text-[#1b120c]" type="submit" aria-label="Create playlist">
           Create
         </button>
       </form>
@@ -46,16 +46,16 @@ export default function PlaylistsPage() {
                       {index + 1}. {entry?.title ?? "Missing track"} — {entry?.artist ?? ""}
                     </span>
                     <span className="flex gap-2">
-                      <button type="button" onClick={() => void app.moveInPlaylist(playlist.id, item.trackId, -1)}>
+                      <button type="button" aria-label={`Move ${entry?.title ?? "track"} up in ${playlist.name}`} onClick={() => void app.moveInPlaylist(playlist.id, item.trackId, -1)}>
                         Up
                       </button>
-                      <button type="button" onClick={() => void app.moveInPlaylist(playlist.id, item.trackId, 1)}>
+                      <button type="button" aria-label={`Move ${entry?.title ?? "track"} down in ${playlist.name}`} onClick={() => void app.moveInPlaylist(playlist.id, item.trackId, 1)}>
                         Down
                       </button>
-                      <button type="button" onClick={() => entry && app.playTrack(entry.id, rows.map((row) => row.trackId))}>
+                      <button type="button" aria-label={`Play ${entry?.title ?? "track"} from ${playlist.name}`} onClick={() => entry && app.playTrack(entry.id, rows.map((row) => row.trackId))}>
                         Play
                       </button>
-                      <button type="button" onClick={() => void app.removeFromPlaylist(playlist.id, item.trackId)}>
+                      <button type="button" aria-label={`Remove ${entry?.title ?? "track"} from ${playlist.name}`} onClick={() => void app.removeFromPlaylist(playlist.id, item.trackId)}>
                         Remove
                       </button>
                     </span>

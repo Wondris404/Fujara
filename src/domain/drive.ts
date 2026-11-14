@@ -5,6 +5,25 @@ export function driveConnection(input: { clientId?: string; clientSecret?: strin
   return "not_connected";
 }
 
+export type GoogleOAuthConfig = {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+};
+
+/** Fail closed. Missing id, secret, or redirect URI means Drive OAuth stays off. */
+export function readGoogleOAuthConfig(env: {
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  GOOGLE_REDIRECT_URI?: string;
+}): GoogleOAuthConfig | null {
+  const clientId = env.GOOGLE_CLIENT_ID?.trim();
+  const clientSecret = env.GOOGLE_CLIENT_SECRET?.trim();
+  const redirectUri = env.GOOGLE_REDIRECT_URI?.trim();
+  if (!clientId || !clientSecret || !redirectUri) return null;
+  return { clientId, clientSecret, redirectUri };
+}
+
 export type DriveUploadResult = { fileId: string; name: string; md5Checksum?: string };
 
 /**

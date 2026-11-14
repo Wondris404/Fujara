@@ -1,6 +1,8 @@
--- Optional PostgreSQL metadata. Audio bytes do not belong in these tables.
--- Apply with your own database when cloud sync is configured.
--- Row filters are expressed as comments because this starter has no database role wiring yet.
+-- Optional PostgreSQL metadata for Fujara. One database, no second store.
+-- Audio bytes stay on the device (IndexedDB / OPFS) and in optional per-user Drive backups.
+-- Do not add bytea, blob, or file-content columns here.
+-- The API sets the session user with SET LOCAL fujara.user_id before queries.
+-- Policies are real row level security and are safe to re-apply.
 
 create table if not exists profiles (
   id uuid primary key,
@@ -20,6 +22,9 @@ create table if not exists tracks (
   source_page_url text,
   source_track_id text,
   user_edited boolean not null default false,
+  favorite boolean not null default false,
+  version integer not null default 1,
+  deleted_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -29,6 +34,7 @@ create table if not exists playlists (
   owner_id uuid not null references profiles (id),
   name text not null,
   version integer not null default 1,
+  deleted_at timestamptz,
   updated_at timestamptz not null default now()
 );
 
@@ -52,5 +58,51 @@ create table if not exists backup_refs (
   updated_at timestamptz not null default now()
 );
 
--- Intended policy: a row is visible only when owner_id matches the authenticated profile.
--- Do not add a public audio URL column.
+alter table tracks add column if not exists favorite boolean not null default false;
+alter table tracks add column if not exists version integer not null default 1;
+alter table tracks add column if not exists deleted_at timestamptz;
+alter table playlists add column if not exists version integer not null default 1;
+alter table playlists add column if not exists deleted_at timestamptz;
+
+alter table profiles enable row level security;
+alter table tracks enable row level security;
+alter table playlists enable row level security;
+alter table playlist_items enable row level security;
+alter table backup_refs enable row level security;
+
+drop policy if exists profiles_self on profiles;
+create policy profiles_self on profiles
+  using (id::text = current_setting('fujara.user_id', true))
+  with check (id::text = current_setting('fujara.user_id', true));
+
+drop policy if exists tracks_owner on tracks;
+create policy tracks_owner on tracks
+  using (owner_id::text = current_setting('fujara.user_id', true))
+  with check (owner_id::text = current_setting('fujara.user_id', true));
+
+drop policy if exists playlists_owner on playlists;
+create policy playlists_owner on playlists
+  using (owner_id::text = current_setting('fujara.user_id', true))
+  with check (owner_id::text = current_setting('fujara.user_id', true));
+
+drop policy if exists items_owner on playlist_items;
+create policy items_owner on playlist_items
+  using (
+    exists (
+      select 1 from playlists
+      where playlists.id = playlist_items.playlist_id
+        and playlists.owner_id::text = current_setting('fujara.user_id', true)
+    )
+  )
+  with check (
+    exists (
+      select 1 from playlists
+      where playlists.id = playlist_items.playlist_id
+        and playlists.owner_id::text = current_setting('fujara.user_id', true)
+    )
+  );
+
+drop policy if exists backups_owner on backup_refs;
+create policy backups_owner on backup_refs
+  using (owner_id::text = current_setting('fujara.user_id', true))
+  with check (owner_id::text = current_setting('fujara.user_id', true));

@@ -14,6 +14,9 @@ export type LibraryEntry = {
   contentHash: string | null;
   source: SourceRef | null;
   userEdited: boolean;
+  favorite: boolean;
+  deletedAt: string | null;
+  version: number;
   createdAt: string;
   updatedAt: string;
 };

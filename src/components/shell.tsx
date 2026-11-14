@@ -106,6 +106,23 @@ export function Shell({ children }: { children: ReactNode }) {
               onChange={(event) => player.setVolume(Number(event.target.value))}
             />
           </label>
+          {player.queue.length > 0 ? (
+            <ol aria-label="Queue" className="max-h-24 overflow-auto text-xs">
+              {player.queue.map((id, index) => {
+                const title = player.entries.find((entry) => entry.id === id)?.title ?? "Untitled";
+                const current = index === player.queueIndex;
+                return (
+                  <li
+                    key={`${id}-${index}`}
+                    aria-current={current ? "true" : undefined}
+                    className={current ? "text-[var(--gold)]" : "text-[var(--muted)]"}
+                  >
+                    {title}
+                  </li>
+                );
+              })}
+            </ol>
+          ) : null}
           {player.playerError ? <p className="text-xs text-[#e7a08c]">{player.playerError}</p> : null}
         </div>
       </footer>

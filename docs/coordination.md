@@ -21,6 +21,10 @@ The runtime can start helper agents, including isolated worktrees. Those checkou
 | 9 | Security | Ownership filter, bearer guard, redaction helper, no API caching, no shared Drive |
 | 10 | Quality | Vitest, Playwright spec, CI workflow, testing doc |
 
+## Completion pass
+
+The ten workstreams stayed in this checkout. Isolated worktrees were not created, because this folder is the only Fujara tree and concurrent writers would fight over the same modules. No helper process was launched. The coordinator implemented playback isolation, import restore, shell precache, session tokens, sync merge, Drive OAuth start/callback, MusicBrainz and Internet Archive search, and the profile picker.
+
 ## Unresolved
 
 - No production credentials

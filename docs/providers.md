@@ -7,8 +7,8 @@ Checked 2026-11-14. None of these are a working download catalogue inside Fujara
 | Local files | Manual import and playback | Implemented |
 | Mock catalogue | Fake metadata search | Code exists. Disabled unless `NEXT_PUBLIC_ENABLE_MOCK_SOURCE=true`. Results say Mock. |
 | https://en1.mygomp3.com/ | Unknown | No official public API was verified. Not called. Not required. |
-| MusicBrainz | Metadata search only | Candidate. It does not provide the recording audio. Not integrated. |
-| Internet Archive | Some items allow download | Candidate only. Each item has its own rights. Not integrated. |
+| MusicBrainz | Metadata search only | Used by `/api/sources/search`. Results are recording titles. No audio URL is attached. |
+| Internet Archive | Metadata, download only when `licenseurl` is present | Used by the same route. A download capability is set only when the item includes a license URL. |
 | YouTube, Spotify, Apple Music | Hosted playback under their own apps | Not a download API for Fujara. Not integrated. |
 
 Search in the library page filters local rows. It never synthesizes a real discography.

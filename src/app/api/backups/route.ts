@@ -1,5 +1,5 @@
-import { authorizeCloudRequest } from "@/domain/ownership";
 import { driveConnection } from "@/domain/drive";
+import { readSession } from "@/server/session";
 import { NextResponse } from "next/server";
 
 const hits = new Map<string, { count: number; reset: number }>();
@@ -18,9 +18,15 @@ function limited(ip: string): boolean {
 export async function GET(request: Request) {
   const ip = request.headers.get("x-forwarded-for") ?? "local";
   if (limited(ip)) return NextResponse.json({ error: "rate_limited" }, { status: 429 });
-  const decision = authorizeCloudRequest(request.headers.get("authorization"), process.env.FUJARA_SESSION_SECRET);
-  if (!decision.ok) return NextResponse.json({ error: decision.error }, { status: decision.status });
+  if (!process.env.FUJARA_SESSION_SECRET) {
+    return NextResponse.json({ error: "not_connected" }, { status: 503 });
+  }
+  const header = request.headers.get("authorization");
+  const token = header?.startsWith("Bearer ") ? header.slice(7) : null;
+  const userId = await readSession(token, process.env.FUJARA_SESSION_SECRET);
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   return NextResponse.json({
+    userId,
     drive: driveConnection({
       clientId: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,

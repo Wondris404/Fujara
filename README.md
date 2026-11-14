@@ -37,7 +37,9 @@ npm run build
 npm run test:e2e
 ```
 
-`test:e2e` needs Playwright's Chromium (`npx playwright install chromium`) and was not treated as an iPhone test.
+`test:e2e` starts production with `npx next start -p 4173` (`reuseExistingServer: false` in `playwright.config.ts`). It needs a prior `npm run build` and Playwright's Chromium (`npx playwright install chromium`). That e2e run was **not** executed in the helper-10 pass. It is not an iPhone test.
+
+Unit tests exist (`npm test`). iPhone is **not verified**. Drive live upload is **not verified**. Ten helpers were requested.
 
 ## Local-only mode
 

@@ -6,6 +6,9 @@ import { useFujara } from "@/lib/fujara-context";
 export default function LibraryPage() {
   const app = useFujara();
   const [message, setMessage] = useState("");
+  const [catalogueQuery, setCatalogueQuery] = useState("");
+  const [hits, setHits] = useState<{ title: string; artist: string; capabilities: string[]; pageUrl?: string }[]>([]);
+  const [searchNote, setSearchNote] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const filtered = app.entries.filter((entry) => {
     const q = app.query.trim().toLowerCase();
@@ -13,7 +16,7 @@ export default function LibraryPage() {
     return `${entry.title} ${entry.artist}`.toLowerCase().includes(q);
   });
 
-  async function take(files: FileList | null) {
+  async function take(files: FileList | File[] | null) {
     if (!files || files.length === 0) return;
     setMessage("Saving on this device…");
     setMessage(await app.importFiles(files));
@@ -49,8 +52,9 @@ export default function LibraryPage() {
               accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac"
               multiple
               onChange={(event) => {
-                void take(event.target.files);
+                const chosen = Array.from(event.target.files ?? []);
                 event.target.value = "";
+                void take(chosen);
               }}
             />
           </label>
@@ -70,8 +74,56 @@ export default function LibraryPage() {
       <div className="rounded-2xl border p-4" style={{ borderColor: "var(--line)" }}>
         <h3 className="text-lg">External catalogue</h3>
         <p className="text-sm text-[var(--muted)]">
-          No music provider is connected. A typed artist name will not produce real songs.
+          Catalogue search is separate from the library search above. It uses MusicBrainz for real recording titles and Internet Archive for items that publish a license URL. It does not invent songs. A metadata row is not a download.
         </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <input
+            aria-label="Search catalogue"
+            className="min-w-56 flex-1 rounded-full border bg-transparent px-4 py-2 text-sm"
+            style={{ borderColor: "var(--line)" }}
+            placeholder="Search the catalogue"
+            value={catalogueQuery}
+            onChange={(event) => setCatalogueQuery(event.target.value)}
+          />
+        <button
+          type="button"
+          className="rounded-full border px-4 py-2 text-sm"
+          style={{ borderColor: "var(--line)" }}
+          onClick={() => {
+            const q = catalogueQuery.trim();
+            if (!q) {
+              setHits([]);
+              setSearchNote("Type a name in catalogue search. Library search does not query the internet.");
+              return;
+            }
+            setSearchNote("Searching…");
+            void fetch(`/api/sources/search?q=${encodeURIComponent(q)}`)
+              .then((response) => response.json())
+              .then((body: { hits?: { title: string; artist: string; capabilities: string[]; pageUrl?: string }[] }) => {
+                setHits(body.hits ?? []);
+                setSearchNote(body.hits?.length ? "" : "No results from the connected sources.");
+              })
+              .catch(() => setSearchNote("Catalogue search failed. Local library is unchanged."));
+          }}
+        >
+          Search catalogue
+        </button>
+        </div>
+        {searchNote ? <p className="mt-2 text-sm">{searchNote}</p> : null}
+        <ul className="mt-2 space-y-2 text-sm">
+          {hits.map((hit) => (
+            <li key={`${hit.artist}-${hit.title}`}>
+              {hit.artist} — {hit.title} · {hit.capabilities.join(", ")}
+              {hit.pageUrl ? (
+                <>
+                  {" "}
+                  <a href={hit.pageUrl} target="_blank" rel="noreferrer">Open source</a>
+                </>
+              ) : null}
+              {hit.capabilities.includes("download") ? " · Download is offered by the source page" : " · Audio unavailable here"}
+            </li>
+          ))}
+        </ul>
         {app.mockEnabled ? (
           <ul className="mt-2 text-sm">
             {app.externalHits.map((hit) => (
@@ -97,14 +149,31 @@ export default function LibraryPage() {
                 <p className="mt-1 text-xs text-[var(--moss)]">{app.labelsFor(entry).join(" · ")}</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" className="rounded border px-3 py-1 text-sm" style={{ borderColor: "var(--line)" }} onClick={() => app.playTrack(entry.id, filtered.map((row) => row.id))}>
+                <button type="button" aria-label={`Play ${entry.title}`} className="rounded border px-3 py-1 text-sm" style={{ borderColor: "var(--line)" }} onClick={() => app.playTrack(entry.id, filtered.map((row) => row.id))}>
                   Play
+                </button>
+                <button type="button" aria-label={entry.favorite ? `Unfavorite ${entry.title}` : `Favorite ${entry.title}`} className="rounded border px-3 py-1 text-sm" style={{ borderColor: "var(--line)" }} onClick={() => void app.toggleFavorite(entry.id)}>
+                  {entry.favorite ? "Unfavorite" : "Favorite"}
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Edit ${entry.title}`}
+                  className="rounded border px-3 py-1 text-sm"
+                  style={{ borderColor: "var(--line)" }}
+                  onClick={() => {
+                    const title = window.prompt("Title", entry.title);
+                    const artist = window.prompt("Artist", entry.artist);
+                    if (title && artist) void app.editEntry(entry.id, title, artist);
+                  }}
+                >
+                  Edit
                 </button>
                 {app.playlists.map((playlist) => (
                   <button
                     key={playlist.id}
                     type="button"
                     className="rounded border px-3 py-1 text-sm"
+                    aria-label={`Add ${entry.title} to ${playlist.name}`}
                     style={{ borderColor: "var(--line)" }}
                     onClick={() => void app.addToPlaylist(playlist.id, entry.id)}
                   >

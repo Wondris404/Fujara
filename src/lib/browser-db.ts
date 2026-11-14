@@ -77,6 +77,58 @@ async function all<T>(db: IDBDatabase, store: StoreName): Promise<T[]> {
   return rows;
 }
 
+// IDB cursors and getAll return the whole record. There is no cursor option
+// that omits `blob`, so a list that never reads blob bytes needs a schema
+// version bump (metadata store separate from the blob). DB_VERSION stays at 1
+// and the audio store is unchanged so existing rows stay readable.
+function audioMetaOnly(row: AudioRow): LocalAudioMeta {
+  return {
+    id: row.id,
+    profileId: row.profileId,
+    trackId: row.trackId,
+    size: row.size,
+    sha256: row.sha256,
+    mime: row.mime,
+  };
+}
+
+export async function listAudioMeta(db: IDBDatabase): Promise<LocalAudioMeta[]> {
+  const tx = db.transaction("audio", "readonly");
+  const rows: LocalAudioMeta[] = [];
+  await new Promise<void>((resolve, reject) => {
+    const request = tx.objectStore("audio").openCursor();
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve();
+        return;
+      }
+      rows.push(audioMetaOnly(cursor.value as AudioRow));
+      cursor.continue();
+    };
+  });
+  await txDone(tx);
+  return rows;
+}
+
+export async function commitStores(
+  db: IDBDatabase,
+  run: (stores: {
+    audio: IDBObjectStore;
+    entries: IDBObjectStore;
+    jobs: IDBObjectStore;
+  }) => void,
+): Promise<void> {
+  const tx = db.transaction(["audio", "entries", "jobs"], "readwrite");
+  run({
+    audio: tx.objectStore("audio"),
+    entries: tx.objectStore("entries"),
+    jobs: tx.objectStore("jobs"),
+  });
+  await txDone(tx);
+}
+
 export const browserDb = {
   putEntry: (db: IDBDatabase, entry: LibraryEntry) => put(db, "entries", entry),
   putAudio: (db: IDBDatabase, row: AudioRow) => put(db, "audio", row),
@@ -90,6 +142,7 @@ export const browserDb = {
   deleteBackup: (db: IDBDatabase, id: string) => remove(db, "backups", id),
   entries: (db: IDBDatabase) => all<LibraryEntry>(db, "entries"),
   audio: (db: IDBDatabase) => all<AudioRow>(db, "audio"),
+  listAudioMeta,
   playlists: (db: IDBDatabase) => all<Playlist>(db, "playlists"),
   items: (db: IDBDatabase) => all<PlaylistItem>(db, "items"),
   backups: (db: IDBDatabase) => all<BackupRef>(db, "backups"),

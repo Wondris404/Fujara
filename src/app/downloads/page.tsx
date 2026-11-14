@@ -13,7 +13,7 @@ export default function DownloadsPage() {
         {app.quotaBytes ? ` of about ${formatBytes(app.quotaBytes)} browser quota` : ""}. Persistent storage:{" "}
         {app.persistent === null ? "unknown" : app.persistent ? "granted" : "not granted"}.
       </p>
-      <button type="button" className="rounded-full border px-4 py-2 text-sm" style={{ borderColor: "var(--line)" }} onClick={() => void app.requestPersistent()}>
+      <button type="button" aria-label="Request persistent storage" className="rounded-full border px-4 py-2 text-sm" style={{ borderColor: "var(--line)" }} onClick={() => void app.requestPersistent()}>
         Request persistent storage
       </button>
       {app.storageNote ? <p className="text-sm">{app.storageNote}</p> : null}
@@ -26,13 +26,13 @@ export default function DownloadsPage() {
               <p>{entry.title}</p>
               <p className="text-xs text-[var(--moss)]">{app.labelsFor(entry).join(" · ")}</p>
               <div className="mt-2 flex flex-wrap gap-2 text-sm">
-                <button type="button" disabled={!offline} onClick={() => void app.removeLocal(entry.id)}>
+                <button type="button" aria-label={`Remove local download of ${entry.title}`} disabled={!offline} onClick={() => void app.removeLocal(entry.id)}>
                   Remove local download
                 </button>
-                <button type="button" onClick={() => void app.forgetBackupRef(entry.id)}>
+                <button type="button" aria-label={`Delete Drive backup reference for ${entry.title}`} onClick={() => void app.forgetBackupRef(entry.id)}>
                   Delete Drive backup reference
                 </button>
-                <button type="button" onClick={() => void app.removeFromLibrary(entry.id)}>
+                <button type="button" aria-label={`Remove ${entry.title} from library`} onClick={() => void app.removeFromLibrary(entry.id)}>
                   Remove from library
                 </button>
               </div>

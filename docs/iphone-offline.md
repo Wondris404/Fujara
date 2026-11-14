@@ -1,6 +1,6 @@
 # iPhone offline test
 
-These steps were **not run on a real iPhone** in this session. Desktop Chromium does not prove Home Screen behavior.
+iPhone is **not verified**. These steps were **not run on a real iPhone**. Desktop Chromium does not prove Home Screen behavior. Drive live upload is a separate check and is also **not verified**.
 
 ## Install
 

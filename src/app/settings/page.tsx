@@ -12,9 +12,26 @@ export default function SettingsPage() {
       <article className="rounded-2xl border p-4" style={{ borderColor: "var(--line)" }}>
         <h3 className="text-lg">This device</h3>
         <p className="text-sm text-[var(--muted)]">
-          Local profiles only separate libraries inside this browser. They are not accounts and they do not unlock cloud APIs.
+          Local profiles only separate libraries inside this browser. Local profiles are not a cloud login. They are not accounts and they do not unlock cloud APIs.
         </p>
-        <p className="mt-2 text-sm">Active: {app.profile?.name ?? "Signed out of the local profile"}</p>
+        <p className="mt-2 text-sm">Active device profile: {app.profile?.name ?? "None selected. This is not a cloud sign-in."}</p>
+        {app.profiles.length === 0 ? <p className="mt-3 text-sm text-[var(--muted)]">No local profiles on this device yet.</p> : null}
+        <ul className="mt-3 flex flex-wrap gap-2">
+          {app.profiles.map((item) => (
+            <li key={item.id}>
+              <button
+                type="button"
+                aria-label={`Choose local profile ${item.name}`}
+                aria-pressed={app.profile?.id === item.id}
+                className="rounded-full border px-3 py-1 text-sm"
+                style={{ borderColor: "var(--line)" }}
+                onClick={() => void app.chooseProfile(item.id)}
+              >
+                Open {item.name}
+              </button>
+            </li>
+          ))}
+        </ul>
         <form
           className="mt-3 flex flex-wrap gap-2"
           onSubmit={(event) => {
@@ -31,11 +48,11 @@ export default function SettingsPage() {
             placeholder="Another local profile"
             onChange={(event) => setName(event.target.value)}
           />
-          <button className="rounded-full border px-4 py-2" style={{ borderColor: "var(--line)" }} type="submit">
+          <button className="rounded-full border px-4 py-2" style={{ borderColor: "var(--line)" }} type="submit" aria-label="Create and switch to a new local profile">
             Switch to a new profile
           </button>
-          <button className="rounded-full border px-4 py-2" style={{ borderColor: "var(--line)" }} type="button" onClick={app.signOutLocal}>
-            Sign out locally
+          <button className="rounded-full border px-4 py-2" style={{ borderColor: "var(--line)" }} type="button" aria-label="Leave the active local profile" onClick={app.signOutLocal}>
+            Leave local profile
           </button>
         </form>
       </article>
@@ -61,6 +78,7 @@ export default function SettingsPage() {
         <button
           type="button"
           className="mt-3 rounded-full bg-[var(--gold)] px-4 py-2 text-sm text-[#1b120c]"
+          aria-label="Download recovery manifest"
           onClick={() => {
             const blob = new Blob([app.exportManifest()], { type: "application/json" });
             const url = URL.createObjectURL(blob);
