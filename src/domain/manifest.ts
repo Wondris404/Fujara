@@ -38,6 +38,7 @@ export function localLibraryManifest(input: {
     favorite: entry.favorite,
     contentHash: entry.contentHash,
     sourceProvider: entry.source?.provider ?? null,
+    sourcePageUrl: entry.source?.pageUrl ?? null,
     version: entry.version,
     updatedAt: entry.updatedAt,
     deletedAt: entry.deletedAt,

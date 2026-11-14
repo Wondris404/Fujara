@@ -104,20 +104,14 @@ export default function SettingsPage() {
             className="rounded-full bg-[var(--gold)] px-4 py-2 text-sm text-[#1b120c]"
             disabled={!signedIn}
             onClick={() => {
-              const manifest = JSON.parse(app.exportManifest()) as { tracks?: { id: string; title: string; artist: string; favorite: boolean; version: number; contentHash: string | null; sourceProvider: string | null; deletedAt: string | null }[] };
+              const manifest = JSON.parse(app.exportManifest()) as { tracks?: unknown[]; playlists?: unknown[]; backups?: unknown[] };
               void (async () => {
-                for (const track of manifest.tracks ?? []) {
-                  const response = await fetch("/api/library", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(track),
-                  });
-                  if (!response.ok) {
-                    setNote("Could not add the local library to the account.");
-                    return;
-                  }
-                }
-                setNote("Local metadata was sent to the signed-in account. Audio stayed on this device.");
+                const response = await fetch("/api/sync", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ tracks: manifest.tracks ?? [], playlists: manifest.playlists ?? [], backups: manifest.backups ?? [] }),
+                });
+                setNote(response.ok ? "Local metadata, playlists, and backup references were added to the signed-in account. Audio stayed on this device." : "Could not add the local library to the account.");
               })();
             }}
           >

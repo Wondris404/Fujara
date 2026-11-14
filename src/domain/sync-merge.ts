@@ -6,6 +6,7 @@ export type CloudTrack = {
   favorite: boolean;
   contentHash: string | null;
   sourceProvider: string | null;
+  sourcePageUrl?: string | null;
   version: number;
   updatedAt: string;
   deletedAt: string | null;

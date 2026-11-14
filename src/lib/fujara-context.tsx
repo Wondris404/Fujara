@@ -12,7 +12,7 @@ import {
 } from "react";
 import { fetchArchiveAudio } from "@/domain/archive-fetch";
 import { deleteDriveFile, downloadDriveBytes, ensureFujaraFolder, uploadResumable } from "@/domain/drive-transfer";
-import { enqueueOp, settleOps, type SyncOp } from "@/domain/op-queue";
+import { enqueueOp, settleSnapshot, type SyncOp } from "@/domain/op-queue";
 import { adoptManifest, localLibraryManifest, parseManifest } from "@/domain/manifest";
 
 import { availabilityFor, availabilityLabels } from "@/domain/labels";
@@ -155,6 +155,9 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
   const [repeatMode, setRepeatMode] = useState<"off" | "all" | "one">("off");
   const [shuffleOn, setShuffleOn] = useState(false);
   const [pendingOps, setPendingOps] = useState(0);
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const accountRef = useRef<string | null>(null);
+  accountRef.current = accountId;
   const repeatRef = useRef(repeatMode);
   const queueLenRef = useRef(0);
   repeatRef.current = repeatMode;
@@ -171,13 +174,28 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
       browserDb.jobs(db),
     ]);
     setSnap({
-      entries: entries.filter((row) => row.profileId === profileId),
+      entries: entries.filter((row) => row.profileId === profileId && row.deletedAt === null),
       audio: audio.filter((row) => row.profileId === profileId),
       playlists: playlists.filter((row) => row.profileId === profileId),
       items,
       backups: backups.filter((row) => row.profileId === profileId),
       jobs: jobs.filter((row) => row.profileId === profileId),
     });
+  }, []);
+
+  useEffect(() => {
+    void fetch("/api/auth/status")
+      .then((response) => response.json())
+      .then((body: { signedIn?: boolean; userId?: string | null }) => {
+        const next = body.signedIn && body.userId ? body.userId : null;
+        setAccountId(next);
+        if (next) {
+          const raw = localStorage.getItem(`fujara.ops.${next}`);
+          const ops = raw ? (JSON.parse(raw) as SyncOp[]) : [];
+          setPendingOps(ops.filter((op) => op.body.accountId === next).length);
+        } else setPendingOps(0);
+      })
+      .catch(() => setAccountId(null));
   }, []);
 
   useEffect(() => {
@@ -372,11 +390,29 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
     [profile, reload],
   );
 
+  const rememberOp = useCallback((kind: SyncOp["kind"], body: Record<string, unknown>) => {
+    const account = accountRef.current;
+    if (!account) return;
+    const id = crypto.randomUUID();
+    const op: SyncOp = { id, kind, body: { ...body, opId: id, accountId: account }, attempts: 0 };
+    const key = `fujara.ops.${account}`;
+    const raw = localStorage.getItem(key);
+    const existing = raw ? (JSON.parse(raw) as SyncOp[]) : [];
+    const next = enqueueOp(existing, op);
+    localStorage.setItem(key, JSON.stringify(next));
+    setPendingOps(next.length);
+  }, []);
+
   const removeFromLibrary = useCallback(
     async (trackId: string) => {
       const db = dbRef.current;
       if (!db || !profile) return;
-      await browserDb.deleteEntry(db, trackId);
+      const current = (await browserDb.entries(db)).find((row) => row.id === trackId && row.profileId === profile.id);
+      if (current) {
+        const tombstone = { ...current, deletedAt: new Date().toISOString(), version: current.version + 1, updatedAt: new Date().toISOString() };
+        await browserDb.putEntry(db, tombstone);
+        rememberOp("track", { id: tombstone.id, title: tombstone.title, artist: tombstone.artist, favorite: tombstone.favorite, version: tombstone.version, contentHash: tombstone.contentHash, sourceProvider: tombstone.source?.provider ?? null, sourcePageUrl: tombstone.source?.pageUrl ?? null, mime: tombstone.mime, deletedAt: tombstone.deletedAt });
+      }
       await browserDb.deleteAudio(db, trackId);
       const items = await browserDb.items(db);
       for (const item of items.filter((row) => row.trackId === trackId)) {
@@ -384,7 +420,7 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
       }
       await reload(db, profile.id);
     },
-    [profile, reload],
+    [profile, reload, rememberOp],
   );
 
   const forgetBackupRef = useCallback(
@@ -413,9 +449,10 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
         updatedAt: new Date().toISOString(),
       };
       await browserDb.putPlaylist(db, playlist);
+      rememberOp("playlist", { id: playlist.id, name: playlist.name, version: playlist.version, deletedAt: null, trackIds: [] });
       await reload(db, active.id);
     },
-    [ensureProfile, reload],
+    [ensureProfile, reload, rememberOp],
   );
 
   const addToPlaylist = useCallback(
@@ -430,6 +467,10 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
         trackId,
         position: items.length,
       });
+      const ordered = [...items.map((item) => item.trackId), trackId];
+      const lists = await browserDb.playlists(db);
+      const list = lists.find((row) => row.id === playlistId);
+      if (list) rememberOp("playlist", { id: list.id, name: list.name, version: list.version + 1, deletedAt: null, trackIds: ordered });
       const playlists = await browserDb.playlists(db);
       const playlist = playlists.find((row) => row.id === playlistId);
       if (playlist) {
@@ -441,7 +482,7 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
       }
       await reload(db, profile.id);
     },
-    [profile, reload],
+    [profile, reload, rememberOp],
   );
 
   const removeFromPlaylist = useCallback(
@@ -451,9 +492,13 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
       const items = await browserDb.items(db);
       const target = items.find((item) => item.playlistId === playlistId && item.trackId === trackId);
       if (target) await browserDb.deleteItem(db, target.id);
+      const lists = await browserDb.playlists(db);
+      const list = lists.find((row) => row.id === playlistId);
+      const remaining = items.filter((item) => item.playlistId === playlistId && item.trackId !== trackId).sort((a, b) => a.position - b.position);
+      if (list) rememberOp("playlist", { id: list.id, name: list.name, version: list.version + 1, deletedAt: null, trackIds: remaining.map((item) => item.trackId) });
       await reload(db, profile.id);
     },
-    [profile, reload],
+    [profile, reload, rememberOp],
   );
 
   const moveInPlaylist = useCallback(
@@ -465,9 +510,13 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
       for (const item of next.filter((row) => row.playlistId === playlistId)) {
         await browserDb.putItem(db, item);
       }
+      const lists = await browserDb.playlists(db);
+      const list = lists.find((row) => row.id === playlistId);
+      const ordered = next.filter((row) => row.playlistId === playlistId).sort((a, b) => a.position - b.position);
+      if (list) rememberOp("playlist", { id: list.id, name: list.name, version: list.version + 1, deletedAt: null, trackIds: ordered.map((item) => item.trackId) });
       await reload(db, profile.id);
     },
-    [profile, reload],
+    [profile, reload, rememberOp],
   );
 
   const switchProfile = useCallback(
@@ -544,17 +593,6 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
     setProfile(updated);
   }, [profile]);
 
-  const rememberOp = useCallback((kind: SyncOp["kind"], body: Record<string, unknown>) => {
-    if (!profile) return;
-    const id = crypto.randomUUID();
-    const op: SyncOp = { id, kind, body: { ...body, opId: id }, attempts: 0 };
-    const raw = localStorage.getItem(`fujara.ops.${profile.id}`);
-    const existing = raw ? (JSON.parse(raw) as SyncOp[]) : [];
-    const next = enqueueOp(existing, op);
-    localStorage.setItem(`fujara.ops.${profile.id}`, JSON.stringify(next));
-    setPendingOps(next.length);
-  }, [profile]);
-
   const editEntry = useCallback(
     async (trackId: string, title: string, artist: string) => {
       const db = dbRef.current;
@@ -582,10 +620,12 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
       if (!db || !profile) return;
       const current = (await browserDb.entries(db)).find((row) => row.id === trackId && row.profileId === profile.id);
       if (!current) return;
-      await browserDb.putEntry(db, { ...current, favorite: !current.favorite, version: (current.version ?? 1) + 1, updatedAt: new Date().toISOString() });
+      const updated = { ...current, favorite: !current.favorite, version: (current.version ?? 1) + 1, updatedAt: new Date().toISOString() };
+      await browserDb.putEntry(db, updated);
+      rememberOp("track", { id: updated.id, title: updated.title, artist: updated.artist, favorite: updated.favorite, version: updated.version, contentHash: updated.contentHash, sourceProvider: updated.source?.provider ?? null, sourcePageUrl: updated.source?.pageUrl ?? null, mime: updated.mime, deletedAt: updated.deletedAt });
       await reload(db, profile.id);
     },
-    [profile, reload],
+    [profile, reload, rememberOp],
   );
 
   const requestPersistent = useCallback(async () => {
@@ -764,8 +804,9 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
           bytes,
           parentId: folderId,
         });
+        const backupId = uid();
         await browserDb.putBackup(db, {
-          id: uid(),
+          id: backupId,
           profileId: profile.id,
           trackId,
           provider: "google-drive",
@@ -776,6 +817,7 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
           mime: row.mime,
           updatedAt: new Date().toISOString(),
         });
+        rememberOp("backup", { id: backupId, trackId, fileId: uploaded.fileId, checksum: await sha256Hex(new Uint8Array(bytes).buffer), filename: uploaded.name, mime: row.mime, status: "verified" });
         await reload(db, profile.id);
         return `Backed up ${entry.title}.`;
       } catch (error) {
@@ -828,10 +870,12 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
       }
     },
     pushSync: async () => {
-      if (!profile) return "Choose a local profile first.";
-      const raw = localStorage.getItem(`fujara.ops.${profile.id}`);
-      const ops = raw ? (JSON.parse(raw) as SyncOp[]) : [];
-      if (ops.length === 0) return "No pending metadata changes.";
+      const account = accountRef.current;
+      if (!account) return "Sign in before syncing. Local playback does not need an account.";
+      const key = `fujara.ops.${account}`;
+      const raw = localStorage.getItem(key);
+      const ops = (raw ? (JSON.parse(raw) as SyncOp[]) : []).filter((op) => op.body.accountId === account);
+      if (ops.length === 0) return "No pending metadata changes for this account.";
       try {
         const response = await fetch("/api/sync", {
           method: "POST",
@@ -839,14 +883,17 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
           body: JSON.stringify({
             tracks: ops.filter((op) => op.kind === "track").map((op) => op.body),
             playlists: ops.filter((op) => op.kind === "playlist").map((op) => op.body),
+            backups: ops.filter((op) => op.kind === "backup").map((op) => op.body),
           }),
         });
         const body = (await response.json()) as { applied?: string[]; failed?: { id: string; error: string }[]; error?: string };
         if (!response.ok) return body.error ?? "Sync failed. Pending changes stayed on this device.";
-        const next = settleOps(ops, body.applied ?? [], body.failed ?? []);
-        localStorage.setItem(`fujara.ops.${profile.id}`, JSON.stringify(next));
+        const latest = JSON.parse(localStorage.getItem(key) || "[]") as SyncOp[];
+        const next = settleSnapshot(latest, ops, body.applied ?? [], body.failed ?? []);
+        localStorage.setItem(key, JSON.stringify(next));
         setPendingOps(next.length);
-        return next.length === 0 ? "Metadata sync finished." : "Some metadata changes still need a retry.";
+        const stale = (body.failed ?? []).some((item) => item.error === "stale" || item.error === "conflict");
+        return stale ? "A newer cloud change blocked some edits. They stayed on this device." : next.length === 0 ? "Metadata sync finished." : "Some metadata changes still need a retry.";
       } catch {
         return "Offline. Metadata changes stayed in the local queue.";
       }
@@ -857,10 +904,11 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
       const response = await fetch("/api/sync");
       if (!response.ok) return "Cloud library is not available. Local audio was not changed.";
       const body = (await response.json()) as {
-        tracks?: { id: string; title: string; artist: string; favorite: boolean; version: number; updatedAt: string; deletedAt: string | null; contentHash: string | null; sourceProvider: string | null }[];
+        tracks?: { id: string; title: string; artist: string; favorite: boolean; version: number; updatedAt: string; deletedAt: string | null; contentHash: string | null; sourceProvider: string | null; sourcePageUrl?: string | null }[];
         playlists?: { id: string; name: string; version: number; updatedAt: string; deletedAt: string | null; trackIds: string[] }[];
+        backups?: { id?: string; trackId: string; fileId: string; checksum?: string; filename: string; mime: string; status?: string }[];
       };
-      const manifest = adoptManifest(parseManifest({ version: 1, tracks: body.tracks ?? [], playlists: body.playlists ?? [], backups: [] }), profile.id);
+      const manifest = adoptManifest(parseManifest({ version: 1, tracks: body.tracks ?? [], playlists: body.playlists ?? [], backups: body.backups ?? [] }), profile.id);
       for (const track of manifest.tracks) {
         const existing = snap.entries.find((entry) => entry.id === track.id);
         if (existing && existing.version > track.version) continue;
@@ -872,13 +920,45 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
           durationMs: existing?.durationMs ?? null,
           mime: existing?.mime ?? "audio/mpeg",
           contentHash: track.contentHash,
-          source: track.sourceProvider ? { provider: track.sourceProvider } : null,
+          source: track.sourceProvider ? { provider: track.sourceProvider, pageUrl: track.sourcePageUrl ?? undefined } : null,
           userEdited: existing?.userEdited ?? false,
           favorite: track.favorite,
           deletedAt: track.deletedAt,
           version: track.version,
           createdAt: existing?.createdAt ?? track.updatedAt,
           updatedAt: track.updatedAt,
+        });
+      }
+      for (const playlist of manifest.playlists) {
+        if (playlist.deletedAt) {
+          const items = await browserDb.items(db);
+          for (const item of items.filter((row) => row.playlistId === playlist.id)) await browserDb.deleteItem(db, item.id);
+          await browserDb.deletePlaylist(db, playlist.id);
+          continue;
+        }
+        const local = snap.playlists.find((row) => row.id === playlist.id);
+        if (local && local.version > playlist.version) continue;
+        await browserDb.putPlaylist(db, { id: playlist.id, profileId: profile.id, name: playlist.name, version: playlist.version, updatedAt: playlist.updatedAt });
+        const existingItems = (await browserDb.items(db)).filter((item) => item.playlistId === playlist.id);
+        for (const item of existingItems) await browserDb.deleteItem(db, item.id);
+        for (let position = 0; position < playlist.trackIds.length; position += 1) {
+          const trackId = playlist.trackIds[position];
+          await browserDb.putItem(db, { id: `${playlist.id}:${trackId}`, playlistId: playlist.id, trackId, position });
+        }
+      }
+      for (const backup of manifest.backups) {
+        if (!backup.trackId || !backup.fileId || !backup.filename || !backup.mime) continue;
+        await browserDb.putBackup(db, {
+          id: `${profile.id}:${backup.trackId}`,
+          profileId: profile.id,
+          trackId: backup.trackId,
+          provider: "google-drive",
+          fileId: backup.fileId,
+          status: "verified",
+          checksum: backup.checksum,
+          filename: backup.filename,
+          mime: backup.mime,
+          updatedAt: new Date().toISOString(),
         });
       }
       await reload(db, profile.id);
@@ -889,7 +969,10 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
       if (!db || !profile || !name.trim()) return;
       const current = (await browserDb.playlists(db)).find((row) => row.id === playlistId && row.profileId === profile.id);
       if (!current) return;
-      await browserDb.putPlaylist(db, { ...current, name: name.trim(), version: current.version + 1, updatedAt: new Date().toISOString() });
+      const updated = { ...current, name: name.trim(), version: current.version + 1, updatedAt: new Date().toISOString() };
+      await browserDb.putPlaylist(db, updated);
+      const items = (await browserDb.items(db)).filter((item) => item.playlistId === playlistId).sort((a, b) => a.position - b.position);
+      rememberOp("playlist", { id: updated.id, name: updated.name, version: updated.version, deletedAt: null, trackIds: items.map((item) => item.trackId) });
       await reload(db, profile.id);
     },
     deletePlaylist: async (playlistId) => {
@@ -897,7 +980,9 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
       if (!db || !profile) return;
       const items = await browserDb.items(db);
       for (const item of items.filter((row) => row.playlistId === playlistId)) await browserDb.deleteItem(db, item.id);
+      const current = (await browserDb.playlists(db)).find((row) => row.id === playlistId);
       await browserDb.deletePlaylist(db, playlistId);
+      if (current) rememberOp("playlist", { id: current.id, name: current.name, version: current.version + 1, deletedAt: new Date().toISOString(), trackIds: [] });
       await reload(db, profile.id);
     },
     removeFromQueue: (index) => {
@@ -977,6 +1062,21 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
           const trackId = playlist.trackIds[position];
           await browserDb.putItem(db, { id: `${playlist.id}:${trackId}`, playlistId: playlist.id, trackId, position });
         }
+      }
+      for (const backup of adopted.backups) {
+        if (!backup.trackId || !backup.fileId || !backup.filename || !backup.mime) continue;
+        await browserDb.putBackup(db, {
+          id: `${active.id}:${backup.trackId}`,
+          profileId: active.id,
+          trackId: backup.trackId,
+          provider: "google-drive",
+          fileId: backup.fileId,
+          status: "verified",
+          checksum: backup.checksum,
+          filename: backup.filename,
+          mime: backup.mime,
+          updatedAt: new Date().toISOString(),
+        });
       }
       await reload(db, active.id);
       const missing = adopted.tracks.filter((track) => track.deletedAt === null).length;

@@ -19,17 +19,17 @@ function memoryDb() {
       if (owner !== user) return { rows: [] };
       const existing = tracks.get(String(params[0]));
       if (existing && existing.owner_id !== owner) return { rows: [] };
-      if (existing && Number(existing.version) > Number(params[7])) return { rows: [] };
+      if (existing && Number(existing.version) > Number(params[9])) return { rows: [] };
       const row = {
         id: params[0],
         owner_id: owner,
         title: params[2],
         artist: params[3],
-        content_hash: params[4],
-        source_provider: params[5],
-        favorite: params[6],
-        version: params[7],
-        deleted_at: params[8],
+        content_hash: params[5],
+        source_provider: params[6],
+        favorite: params[8],
+        version: params[9],
+        deleted_at: params[10],
         updated_at: "2026-01-02T00:00:00.000Z",
       };
       tracks.set(String(params[0]), row);

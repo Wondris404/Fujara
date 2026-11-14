@@ -21,6 +21,18 @@ iPhone is **not verified**. These steps were **not run on a real iPhone**. Deskt
 ## Updates and storage
 
 - The shell cache name is `fujara-shell-v2`. Activating a new cache deletes older shell caches only. It does not delete IndexedDB.
+
+## How to open Fujara
+
+This project is a website and an installable PWA. It does not build an APK or an IPA.
+
+- PC: `npm run dev` and open `http://localhost:3000`. Localhost is a secure context, so the service worker can register.
+- Phone or another computer on the network: use HTTPS. Plain `http://192.168.x.x` is not a secure context, so a service worker and some storage APIs will not behave as they do on localhost. Use a host such as Vercel preview or another HTTPS tunnel, then open that `https://` URL.
+- iPhone: Safari → Share → Add to Home Screen → open the icon. This has not been run on a physical iPhone in this repository.
+- Android: Chrome or another supported browser → Install app or Add to Home screen.
+- Desktop Chromium: the install icon in the address bar, after the production site is served over HTTPS or localhost.
+
+Icons: `icon-192.png`, `icon-512.png`, and `apple-touch-icon.png` (180). SVG remains as a scalable icon.
 - Ask for persistent storage from Downloads. Record whether iOS granted it. WebKit has historically applied a seven-day cap to script-writable storage for sites that are not used, with different treatment for Home Screen web apps. Re-read https://webkit.org/tracking-prevention/ before relying on it.
 - Safari in a tab and the Home Screen app do not share storage. Import inside the icon you will use offline.
 - If the browser clears storage, library rows that lose their blobs reconcile as not offline. Metadata without bytes shows **Needs download**.
