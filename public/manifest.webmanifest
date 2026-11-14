@@ -1,0 +1,13 @@
+{
+  "name": "Fujara",
+  "short_name": "Fujara",
+  "description": "Personal local-first music player",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#140e09",
+  "theme_color": "#140e09",
+  "icons": [
+    { "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
