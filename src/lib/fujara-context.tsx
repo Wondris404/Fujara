@@ -13,13 +13,13 @@ import {
 import { availabilityFor, availabilityLabels } from "@/domain/labels";
 import { classifyAudioFile, isQuotaError, metadataFromFilename } from "@/domain/import-policy";
 import { planImport } from "@/domain/import-flow";
-import { createLoadGate, shouldReloadAudio } from "@/domain/player-machine";
+import { createLoadGate, queueIndexAfterEnd, shouldReloadAudio } from "@/domain/player-machine";
 import { moveItem, orderedItems } from "@/domain/playlist";
 import { missingLocalTracks } from "@/domain/reconcile";
 import { sha256Hex } from "@/domain/hash";
 import { searchMockCatalogue, type CatalogueHit } from "@/domain/sources";
-import type { BackupRef, Job, LibraryEntry, Playlist, PlaylistItem } from "@/domain/types";
-import { browserDb, commitStores, openFujaraDb, type AudioRow } from "./browser-db";
+import type { BackupRef, Job, LibraryEntry, LocalAudioMeta, Playlist, PlaylistItem } from "@/domain/types";
+import { browserDb, commitStores, openFujaraDb } from "./browser-db";
 
 const PROFILE_KEY = "fujara.profileId";
 const QUEUE_KEY = "fujara.queue";
@@ -28,7 +28,7 @@ type Profile = { id: string; name: string };
 
 type Snapshot = {
   entries: LibraryEntry[];
-  audio: AudioRow[];
+  audio: LocalAudioMeta[];
   playlists: Playlist[];
   items: PlaylistItem[];
   backups: BackupRef[];
@@ -103,25 +103,37 @@ function loadProfiles(): Profile[] {
   }
 }
 
+function loadQueue(profileId: string): { ids: string[]; index: number } {
+  try {
+    const raw = sessionStorage.getItem(`${QUEUE_KEY}.${profileId}`);
+    const saved = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(saved?.ids) && saved.ids.every((id: unknown) => typeof id === "string")) {
+      const index = Number.isInteger(saved.index) ? saved.index : 0;
+      return { ids: saved.ids, index: Math.max(0, Math.min(index, saved.ids.length - 1)) };
+    }
+  } catch {
+    // An unavailable or invalid queue must not prevent opening the library.
+  }
+  return { ids: [], index: 0 };
+}
+
+const emptySnapshot: Snapshot = { entries: [], audio: [], playlists: [], items: [], backups: [], jobs: [] };
+
 export function FujaraProvider({ children }: { children: ReactNode }) {
   const dbRef = useRef<IDBDatabase | null>(null);
+  const activeProfileRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string | null>(null);
   const gateRef = useRef(createLoadGate());
   const loadedTrackRef = useRef<string | null>(null);
+  const playSelectionRef = useRef(false);
+  const queueLengthRef = useRef(0);
   const volumeRef = useRef(1);
   const [ready, setReady] = useState(false);
   const [offline, setOffline] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [snap, setSnap] = useState<Snapshot>({
-    entries: [],
-    audio: [],
-    playlists: [],
-    items: [],
-    backups: [],
-    jobs: [],
-  });
+  const [snap, setSnap] = useState(emptySnapshot);
   const [quotaBytes, setQuotaBytes] = useState<number | null>(null);
   const [persistent, setPersistent] = useState<boolean | null>(null);
   const [query, setQuery] = useState("");
@@ -134,20 +146,25 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
   const [playerError, setPlayerError] = useState("");
   const [storageNote, setStorageNote] = useState("");
 
+  queueLengthRef.current = queue.length;
+
   const reload = useCallback(async (db: IDBDatabase, profileId: string) => {
     const [entries, audio, playlists, items, backups, jobs] = await Promise.all([
       browserDb.entries(db),
-      browserDb.audio(db),
+      browserDb.listAudioMeta(db),
       browserDb.playlists(db),
       browserDb.items(db),
       browserDb.backups(db),
       browserDb.jobs(db),
     ]);
+    if (activeProfileRef.current !== profileId) return;
+    const ownedPlaylists = playlists.filter((row) => row.profileId === profileId);
+    const playlistIds = new Set(ownedPlaylists.map((row) => row.id));
     setSnap({
       entries: entries.filter((row) => row.profileId === profileId),
       audio: audio.filter((row) => row.profileId === profileId),
-      playlists: playlists.filter((row) => row.profileId === profileId),
-      items,
+      playlists: ownedPlaylists,
+      items: items.filter((row) => playlistIds.has(row.playlistId)),
       backups: backups.filter((row) => row.profileId === profileId),
       jobs: jobs.filter((row) => row.profileId === profileId),
     });
@@ -162,7 +179,7 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
     const onEnded = () => {
-      setQueueIndex((index) => index + 1);
+      setQueueIndex((index) => queueIndexAfterEnd(index, queueLengthRef.current, "off") ?? index);
     };
     element.addEventListener("timeupdate", onTime);
     element.addEventListener("durationchange", onMeta);
@@ -195,25 +212,28 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       const db = await openFujaraDb();
-      if (cancelled) return;
+      if (cancelled) {
+        db.close();
+        return;
+      }
       dbRef.current = db;
       const known = loadProfiles();
       setProfiles(known);
       const saved = localStorage.getItem(PROFILE_KEY);
       const active = known.find((item) => item.id === saved) ?? null;
+      activeProfileRef.current = active?.id ?? null;
       setProfile(active);
-      if (active) await reload(db, active.id);
+      if (active) {
+        const storedQueue = loadQueue(active.id);
+        setQueue(storedQueue.ids);
+        setQueueIndex(storedQueue.index);
+        await reload(db, active.id);
+      }
       if (navigator.storage?.estimate) {
         const estimate = await navigator.storage.estimate();
         setQuotaBytes(estimate.quota ?? null);
       }
       if (navigator.storage?.persisted) setPersistent(await navigator.storage.persisted());
-      const storedQueue = sessionStorage.getItem(QUEUE_KEY);
-      if (storedQueue) {
-        const parsed = JSON.parse(storedQueue) as { ids: string[]; index: number };
-        setQueue(parsed.ids);
-        setQueueIndex(parsed.index);
-      }
       if ("serviceWorker" in navigator) {
         try {
           await navigator.serviceWorker.register("/sw.js");
@@ -232,15 +252,18 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
   }, [reload]);
 
   const ensureProfile = useCallback(async () => {
-    if (profile) return profile;
+    const known = loadProfiles();
+    const active = known.find((item) => item.id === activeProfileRef.current);
+    if (active) return active;
     const created: Profile = { id: uid(), name: "This device" };
-    const next = [...loadProfiles(), created];
+    const next = [...known, created];
     localStorage.setItem("fujara.profiles", JSON.stringify(next));
     localStorage.setItem(PROFILE_KEY, created.id);
+    activeProfileRef.current = created.id;
     setProfiles(next);
     setProfile(created);
     return created;
-  }, [profile]);
+  }, []);
 
   const importFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -271,8 +294,7 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
           const hash = await sha256Hex(bytes);
           const known = (await browserDb.entries(db)).filter((row) => row.profileId === active.id);
           const existing = known.find((row) => row.contentHash === hash) ?? null;
-          const audioRows = await browserDb.audio(db);
-          const hasLocalAudio = existing ? audioRows.some((row) => row.id === existing.id) : false;
+          const hasLocalAudio = existing ? Boolean(await browserDb.getAudio(db, existing.id)) : false;
           const decision = planImport({
             accepted: true,
             existing,
@@ -392,23 +414,11 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
     async (playlistId: string, trackId: string) => {
       const db = dbRef.current;
       if (!db || !profile) return;
-      const items = (await browserDb.items(db)).filter((item) => item.playlistId === playlistId);
-      if (items.some((item) => item.trackId === trackId)) return;
-      await browserDb.putItem(db, {
-        id: uid(),
-        playlistId,
-        trackId,
-        position: items.length,
+      await browserDb.editPlaylistItems(db, profile.id, playlistId, (items) => {
+        if (items.some((item) => item.trackId === trackId)) return items;
+        const position = items.reduce((next, item) => Math.max(next, item.position + 1), 0);
+        return [...items, { id: uid(), playlistId, trackId, position }];
       });
-      const playlists = await browserDb.playlists(db);
-      const playlist = playlists.find((row) => row.id === playlistId);
-      if (playlist) {
-        await browserDb.putPlaylist(db, {
-          ...playlist,
-          version: playlist.version + 1,
-          updatedAt: new Date().toISOString(),
-        });
-      }
       await reload(db, profile.id);
     },
     [profile, reload],
@@ -418,9 +428,9 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
     async (playlistId: string, trackId: string) => {
       const db = dbRef.current;
       if (!db || !profile) return;
-      const items = await browserDb.items(db);
-      const target = items.find((item) => item.playlistId === playlistId && item.trackId === trackId);
-      if (target) await browserDb.deleteItem(db, target.id);
+      await browserDb.editPlaylistItems(db, profile.id, playlistId, (items) =>
+        items.some((item) => item.trackId === trackId) ? items.filter((item) => item.trackId !== trackId) : items,
+      );
       await reload(db, profile.id);
     },
     [profile, reload],
@@ -430,15 +440,38 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
     async (playlistId: string, trackId: string, direction: -1 | 1) => {
       const db = dbRef.current;
       if (!db || !profile) return;
-      const items = await browserDb.items(db);
-      const next = moveItem(items, playlistId, trackId, direction);
-      for (const item of next.filter((row) => row.playlistId === playlistId)) {
-        await browserDb.putItem(db, item);
-      }
+      await browserDb.editPlaylistItems(db, profile.id, playlistId, (items) =>
+        moveItem(items, playlistId, trackId, direction),
+      );
       await reload(db, profile.id);
     },
     [profile, reload],
   );
+
+  const unloadAudio = useCallback(() => {
+    loadedTrackRef.current = null;
+    if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    urlRef.current = null;
+    const element = audioRef.current;
+    if (element) {
+      element.pause();
+      element.removeAttribute("src");
+      element.load();
+    }
+    setPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    if ("mediaSession" in navigator) navigator.mediaSession.metadata = null;
+  }, []);
+
+  const clearPlayer = useCallback(() => {
+    setQueue([]);
+    setQueueIndex(0);
+    gateRef.current.start();
+    playSelectionRef.current = false;
+    unloadAudio();
+    setPlayerError("");
+  }, [unloadAudio]);
 
   const switchProfile = useCallback(
     async (name: string) => {
@@ -448,41 +481,21 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
       const next = [...loadProfiles(), created];
       localStorage.setItem("fujara.profiles", JSON.stringify(next));
       localStorage.setItem(PROFILE_KEY, created.id);
+      activeProfileRef.current = created.id;
       setProfiles(next);
       setProfile(created);
-      setQueue([]);
-      setQueueIndex(0);
-      loadedTrackRef.current = null;
-      gateRef.current.start();
-      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
-      urlRef.current = null;
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.removeAttribute("src");
-      }
+      setSnap(emptySnapshot);
+      clearPlayer();
       await reload(db, created.id);
     },
-    [reload],
+    [clearPlayer, reload],
   );
-
-  const clearPlayer = useCallback(() => {
-    setQueue([]);
-    setQueueIndex(0);
-    loadedTrackRef.current = null;
-    gateRef.current.start();
-    if (urlRef.current) URL.revokeObjectURL(urlRef.current);
-    urlRef.current = null;
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.removeAttribute("src");
-    }
-    if ("mediaSession" in navigator) navigator.mediaSession.metadata = null;
-  }, []);
 
   const signOutLocal = useCallback(() => {
     localStorage.removeItem(PROFILE_KEY);
+    activeProfileRef.current = null;
     setProfile(null);
-    setSnap({ entries: [], audio: [], playlists: [], items: [], backups: [], jobs: [] });
+    setSnap(emptySnapshot);
     clearPlayer();
   }, [clearPlayer]);
 
@@ -490,16 +503,15 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
     async (id: string) => {
       const db = dbRef.current;
       const match = loadProfiles().find((item) => item.id === id);
-      if (!db || !match) return;
+      if (!db || !match || match.id === activeProfileRef.current) return;
+      const storedQueue = loadQueue(match.id);
       localStorage.setItem(PROFILE_KEY, match.id);
+      activeProfileRef.current = match.id;
       setProfile(match);
+      setSnap(emptySnapshot);
       clearPlayer();
-      const stored = sessionStorage.getItem(`${QUEUE_KEY}.${match.id}`);
-      if (stored) {
-        const parsed = JSON.parse(stored) as { ids: string[]; index: number };
-        setQueue(parsed.ids);
-        setQueueIndex(parsed.index);
-      }
+      setQueue(storedQueue.ids);
+      setQueueIndex(storedQueue.index);
       await reload(db, match.id);
     },
     [clearPlayer, reload],
@@ -568,35 +580,57 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
     if (audioRef.current) audioRef.current.volume = volume;
   }, [volume]);
 
+  const playAudio = useCallback(async (element: HTMLAudioElement) => {
+    const source = element.src;
+    try {
+      await element.play();
+      if (element.src === source) setPlayerError("");
+    } catch (error) {
+      if (element.src !== source || (error instanceof DOMException && error.name === "AbortError")) return;
+      setPlayerError(error instanceof Error ? error.message : "Playback was blocked.");
+    }
+  }, []);
+
+  const moveQueue = useCallback((direction: -1 | 1) => {
+    playSelectionRef.current = true;
+    setQueueIndex((index) => Math.max(0, Math.min(index + direction, queueLengthRef.current - 1)));
+  }, []);
+
   useEffect(() => {
     if (!shouldReloadAudio("track")) return;
     const id = queue[queueIndex];
     const profileId = profile?.id;
-    if (profileId) sessionStorage.setItem(`${QUEUE_KEY}.${profileId}`, JSON.stringify({ ids: queue, index: queueIndex }));
-    if (!id) return;
+    try {
+      if (profileId) sessionStorage.setItem(`${QUEUE_KEY}.${profileId}`, JSON.stringify({ ids: queue, index: queueIndex }));
+    } catch {
+      // Playback still works when session storage is unavailable.
+    }
     const ticket = gateRef.current.start();
     const db = dbRef.current;
     const element = audioRef.current;
-    if (!db || !element) return;
+    if (!id || !db || !element) return;
     void (async () => {
-      const row = await browserDb.getAudio(db, id);
-      if (!gateRef.current.isCurrent(ticket)) return;
-      if (!row || row.profileId !== profileId) {
-        setPlayerError("This track is not available offline on this device.");
-        setPlaying(false);
-        return;
-      }
-      if (loadedTrackRef.current !== id) {
-        if (urlRef.current) URL.revokeObjectURL(urlRef.current);
-        const url = URL.createObjectURL(row.blob);
-        urlRef.current = url;
-        element.src = url;
-        loadedTrackRef.current = id;
-      }
-      element.volume = volumeRef.current;
-      setPlayerError("");
       try {
-        await element.play();
+        const row = await browserDb.getAudio(db, id);
+        if (!gateRef.current.isCurrent(ticket)) return;
+        if (!row || row.profileId !== profileId) {
+          unloadAudio();
+          setPlayerError("This track is not available offline on this device.");
+          return;
+        }
+        if (loadedTrackRef.current !== id) {
+          if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+          const url = URL.createObjectURL(row.blob);
+          urlRef.current = url;
+          element.src = url;
+          loadedTrackRef.current = id;
+        }
+        element.volume = volumeRef.current;
+        setPlayerError("");
+        if (playSelectionRef.current) {
+          await playAudio(element);
+        }
+        if (!gateRef.current.isCurrent(ticket)) return;
         const entry = entriesRef.current.find((item) => item.id === id);
         if ("mediaSession" in navigator && entry) {
           navigator.mediaSession.metadata = new MediaMetadata({
@@ -604,22 +638,23 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
             artist: entry.artist,
             album: "Fujara",
           });
-          navigator.mediaSession.setActionHandler("play", () => void element.play());
+          navigator.mediaSession.setActionHandler("play", () => void playAudio(element));
           navigator.mediaSession.setActionHandler("pause", () => element.pause());
-          navigator.mediaSession.setActionHandler("nexttrack", () => setQueueIndex((index) => index + 1));
-          navigator.mediaSession.setActionHandler("previoustrack", () => setQueueIndex((index) => Math.max(0, index - 1)));
+          navigator.mediaSession.setActionHandler("nexttrack", () => moveQueue(1));
+          navigator.mediaSession.setActionHandler("previoustrack", () => moveQueue(-1));
         }
       } catch (error) {
         if (!gateRef.current.isCurrent(ticket)) return;
         setPlayerError(error instanceof Error ? error.message : "Playback was blocked.");
       }
     })();
-  }, [queue, queueIndex, profile?.id]);
+  }, [queue, queueIndex, profile?.id, moveQueue, playAudio, unloadAudio]);
 
   const playTrack = useCallback((trackId: string, queueIds?: string[]) => {
-    const ids = queueIds && queueIds.length > 0 ? queueIds : [trackId];
-    const index = Math.max(0, ids.indexOf(trackId));
-    setQueue(ids);
+    const ids = queueIds?.includes(trackId) ? queueIds : [trackId];
+    const index = ids.indexOf(trackId);
+    playSelectionRef.current = true;
+    setQueue([...ids]);
     setQueueIndex(index);
   }, []);
 
@@ -688,9 +723,14 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
     playTrack,
     toggle: () => {
       const element = audioRef.current;
-      if (!element) return;
-      if (element.paused) void element.play();
-      else element.pause();
+      const trackId = queue[queueIndex];
+      if (!element || !trackId) return;
+      if (element.paused) {
+        playSelectionRef.current = true;
+        if (loadedTrackRef.current === trackId) void playAudio(element);
+      } else {
+        element.pause();
+      }
     },
     seek: (seconds: number) => {
       if (audioRef.current) audioRef.current.currentTime = seconds;
@@ -699,8 +739,8 @@ export function FujaraProvider({ children }: { children: ReactNode }) {
       setVolumeState(nextVolume);
       if (audioRef.current) audioRef.current.volume = nextVolume;
     },
-    next: () => setQueueIndex((index) => Math.min(queue.length - 1, index + 1)),
-    prev: () => setQueueIndex((index) => Math.max(0, index - 1)),
+    next: () => moveQueue(1),
+    prev: () => moveQueue(-1),
     currentEntry: snap.entries.find((entry) => entry.id === queue[queueIndex]) ?? null,
     externalHits:
       process.env.NEXT_PUBLIC_ENABLE_MOCK_SOURCE === "true" ? searchMockCatalogue(query) : [],

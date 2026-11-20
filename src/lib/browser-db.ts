@@ -129,6 +129,39 @@ export async function commitStores(
   await txDone(tx);
 }
 
+async function editPlaylistItems(
+  db: IDBDatabase,
+  profileId: string,
+  playlistId: string,
+  edit: (items: PlaylistItem[]) => PlaylistItem[],
+): Promise<void> {
+  const tx = db.transaction(["playlists", "items"], "readwrite");
+  const playlists = tx.objectStore("playlists");
+  const items = tx.objectStore("items");
+  const done = txDone(tx);
+  const update = Promise.all([
+    requestToPromise<Playlist | undefined>(playlists.get(playlistId)),
+    requestToPromise<PlaylistItem[]>(items.index("byPlaylist").getAll(playlistId)),
+  ]).then(([playlist, previous]) => {
+    if (playlist?.profileId !== profileId) return;
+    const next = edit(previous);
+    if (next === previous) return;
+    try {
+      const previousById = new Map(previous.map((item) => [item.id, item]));
+      for (const item of next) {
+        if (previousById.get(item.id) !== item) items.put(item);
+        previousById.delete(item.id);
+      }
+      for (const id of previousById.keys()) items.delete(id);
+      playlists.put({ ...playlist, version: playlist.version + 1, updatedAt: new Date().toISOString() });
+    } catch (error) {
+      tx.abort();
+      throw error;
+    }
+  });
+  await Promise.all([update, done]);
+}
+
 export const browserDb = {
   putEntry: (db: IDBDatabase, entry: LibraryEntry) => put(db, "entries", entry),
   putAudio: (db: IDBDatabase, row: AudioRow) => put(db, "audio", row),
@@ -143,6 +176,7 @@ export const browserDb = {
   entries: (db: IDBDatabase) => all<LibraryEntry>(db, "entries"),
   audio: (db: IDBDatabase) => all<AudioRow>(db, "audio"),
   listAudioMeta,
+  editPlaylistItems,
   playlists: (db: IDBDatabase) => all<Playlist>(db, "playlists"),
   items: (db: IDBDatabase) => all<PlaylistItem>(db, "items"),
   backups: (db: IDBDatabase) => all<BackupRef>(db, "backups"),
